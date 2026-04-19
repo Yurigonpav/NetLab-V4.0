@@ -1,12 +1,29 @@
 # interface/painel_eventos.py
-# Painel do Modo Análise — três níveis de explicação + Insights com dados reais.
+# Painel do Modo Análise — Estrutura Pedagógica de 6 Seções + Otimizações v3.2
 #
-# OTIMIZAÇÕES v3.1 (freeze fix):
+# NOVA ESTRUTURA PEDAGÓGICA:
+#   O motor pedagógico atua como analista de redes + professor experiente.
+#   Cada evento é estruturado em até 6 seções:
+#     1. Análise              — O que aconteceu + Por que + Conclusão
+#     2. Leitura Técnica      — Como o protocolo funciona internamente
+#     3. Superfície de Risco  — Vulnerabilidades (quando aplicável)
+#     4. Evidência Observada  — Campos do evento + interpretação
+#     5. Interpretação Oper.  — O que significa na prática
+#     6. Ação Sugerida        — O que fazer + justificativa (quando aplicável)
+#
+# ABAS DE EXIBIÇÃO:
+#   Aba 0 "Análise"      → Seções 1 + 2 (análise + protocolo)
+#   Aba 1 "Risco & Dados" → Seções 3 + 4 (risco + evidência)
+#   Aba 2 "Evidências"    → Seções 4 + 5 + 6 (raw + operacional + ação)
+#
+# OTIMIZAÇÕES v3.2 (freeze fix — mantidas da v3.1):
 #   - QScrollArea wrapper removido — QListWidget usa scroll nativo
-#   - Cap de 120 itens no QListWidget com takeItem(0) para remover o mais antigo
+#   - Cap de 120 itens no QListWidget com takeItem(0) O(1)
 #   - _reaplicar_filtros tem guard de chave para evitar reconstrução redundante
-#   - _adicionar_cartao usa scrollToBottom() nativo
-#   - Demais otimizações v3.0 mantidas (deque maxlen, diff incremental de insights)
+#   - _todos_eventos é deque(maxlen=300): O(1) nas duas pontas
+#   - atualizar_insights() diff incremental
+#   - _renderizar_insights() com guard de chave
+#   - Lazy loading: filtros reaplicados só ao abrir a aba
 
 from collections import defaultdict, deque
 import time
@@ -33,11 +50,52 @@ ESTILOS_NIVEL = {
     "CRITICO": {"borda": "#E74C3C", "fundo": "#200a0a", "badge": "#5a0000"},
 }
 
+# Abas de nível: (ícone, rótulo, tooltip)
 ROTULOS_NIVEL = [
-    ("", "Simples",      "Linguagem do dia a dia"),
-    ("", "Técnico",      "Detalhes do protocolo"),
-    ("", "Pacote Bruto", "Conteúdo exato como trafegou na rede"),
+    ("", "Análise",        "Análise do evento + leitura técnica do protocolo"),
+    ("", "Risco & Dados",  "Superfície de risco + evidência observada com interpretação"),
+    ("", "Evidências",     "Dump bruto do pacote + interpretação operacional + ação sugerida"),
 ]
+
+# Cabeçalhos das seções pedagógicas — embutidos na renderização
+SECOES_PEDAGOGICAS = {
+    "analise": {
+        "titulo":   "1. Análise",
+        "subtitulo": "O que aconteceu · Por que aconteceu · Conclusão",
+        "cor":      "#3498DB",
+        "icone":    "📊",
+    },
+    "tecnica": {
+        "titulo":   "2. Leitura Técnica",
+        "subtitulo": "Como o protocolo funciona · Conceitos aplicados ao caso",
+        "cor":      "#2ECC71",
+        "icone":    "⚙️",
+    },
+    "risco": {
+        "titulo":   "3. Superfície de Risco",
+        "subtitulo": "O que pode dar errado · Como a vulnerabilidade ocorre",
+        "cor":      "#E74C3C",
+        "icone":    "⚠",
+    },
+    "evidencia": {
+        "titulo":   "4. Evidência Observada",
+        "subtitulo": "Campos do evento · Significado de cada campo",
+        "cor":      "#F39C12",
+        "icone":    "🔍",
+    },
+    "operacional": {
+        "titulo":   "5. Interpretação Operacional",
+        "subtitulo": "O que significa na prática · Quando vira problema",
+        "cor":      "#9B59B6",
+        "icone":    "🎯",
+    },
+    "acao": {
+        "titulo":   "6. Ação Sugerida",
+        "subtitulo": "O que fazer · Por que · O que monitorar",
+        "cor":      "#1ABC9C",
+        "icone":    "✅",
+    },
+}
 
 # Domínios conhecidos → nome amigável
 DOMINIOS_CONHECIDOS = {
@@ -62,9 +120,8 @@ DOMINIOS_CONHECIDOS = {
     "cloudflare.com": "Cloudflare",   "akamai.net": "Akamai CDN",
     "akamaized.net": "Akamai CDN",    "globo.com": "Globo",
     "uol.com.br": "UOL",              "terra.com.br": "Terra",
-    "zoom.us": "Zoom",                "teams.microsoft.com": "MS Teams",
-    "slack.com": "Slack",             "dropbox.com": "Dropbox",
-    "drive.google.com": "Google Drive",
+    "zoom.us": "Zoom",                "slack.com": "Slack",
+    "dropbox.com": "Dropbox",         "drive.google.com": "Google Drive",
 }
 
 # Limite máximo de widgets reais no QListWidget — evita freeze na troca de aba
@@ -98,6 +155,7 @@ class CartaoEvento(QFrame):
         layout.setContentsMargins(10, 5, 10, 5)
         layout.setSpacing(2)
 
+        # Cabeçalho: ícone+título + timestamp
         cabecalho = QHBoxLayout()
         icone_titulo = QLabel(
             f"{dados.get('icone', '')} {dados.get('titulo', 'Evento')}".strip()
@@ -115,8 +173,9 @@ class CartaoEvento(QFrame):
         cabecalho.addWidget(hora)
         layout.addLayout(cabecalho)
 
-        ip_src   = dados.get("ip_envolvido", "")
-        ip_dst   = dados.get("ip_destino", "")
+        # IPs envolvidos
+        ip_src = dados.get("ip_envolvido", "")
+        ip_dst = dados.get("ip_destino", "")
         ip_texto = ip_src
         if ip_dst and ip_dst != ip_src:
             ip_texto += f" → {ip_dst}"
@@ -127,6 +186,7 @@ class CartaoEvento(QFrame):
         )
         layout.addWidget(lbl_ip)
 
+        # Badge de alerta
         if dados.get("alerta_seguranca"):
             badge = QLabel("⚠ Risco de segurança")
             badge.setStyleSheet(
@@ -201,18 +261,26 @@ class PainelContadores(QWidget):
 
 class PainelEventos(QWidget):
     """
-    Painel completo do Modo Análise com três níveis de explicação.
-    Aba Insights: Sites Acessados (DNS real) + Tipo de Uso + Alertas.
+    Painel completo do Modo Análise com estrutura pedagógica de 6 seções.
 
-    OTIMIZAÇÕES v3.1
+    ESTRUTURA PEDAGÓGICA (professor-analista):
+    ─────────────────────────────────────────
+    O painel exibe cada evento com até 6 seções estruturadas:
+      1. Análise              → O que/por que aconteceu + conclusão
+      2. Leitura Técnica      → Protocolo interno + conceitos aplicados
+      3. Superfície de Risco  → Vulnerabilidades + como ocorrem (se aplicável)
+      4. Evidência Observada  → Campos reais + interpretação de cada campo
+      5. Interpretação Oper.  → Significado prático + quando vira problema
+      6. Ação Sugerida        → O que fazer + justificativa (se aplicável)
+
+    OTIMIZAÇÕES v3.2
     ─────────────────
-    • QScrollArea wrapper removido — QListWidget usa scroll nativo.
-    • Cap de _LIMITE_LISTA_WIDGETS (120) no QListWidget: takeItem(0) remove
-      o mais antigo ao exceder o limite — O(1), sem recriação da lista.
-    • _reaplicar_filtros tem guard de chave: só reconstrói se houve mudança
-      real (tipo/texto/quantidade de eventos).
-    • _todos_eventos é deque(maxlen=300): O(1) nas duas pontas.
-    • atualizar_insights() diff incremental: não recria widgets sem mudança.
+    • QListWidget direto, sem QScrollArea wrapper
+    • Cap de _LIMITE_LISTA_WIDGETS (120) com takeItem(0) O(1)
+    • _reaplicar_filtros com guard de chave
+    • _todos_eventos deque(maxlen=300)
+    • atualizar_insights() diff incremental
+    • Lazy loading ao abrir a aba
     """
 
     LIMITE_EVENTOS = 300
@@ -228,14 +296,14 @@ class PainelEventos(QWidget):
         self._contagem_sessao:   dict  = defaultdict(lambda: defaultdict(int))
 
         # Atributos para insights e alertas
-        self._alertas_seguranca: list  = []
-        self._volume_bytes_total: int  = 0
-        self._ultimo_top_dns:    list  = []
-        self._ultimo_historias:  list  = []
-        self._ultima_chave_dns:  str   = ''
+        self._alertas_seguranca:  list  = []
+        self._volume_bytes_total: int   = 0
+        self._ultimo_top_dns:     list  = []
+        self._ultimo_historias:   list  = []
+        self._ultima_chave_dns:   str   = ''
         self._chave_render_anterior: str = ''
 
-        # Guard para _reaplicar_filtros — evita reconstrução redundante
+        # Guard para _reaplicar_filtros
         self._ultima_chave_filtro = None
 
         self._montar_layout()
@@ -253,7 +321,7 @@ class PainelEventos(QWidget):
         cab = QHBoxLayout()
         fonte_titulo = QFont("Arial", 12)
         fonte_titulo.setBold(True)
-        titulo = QLabel("  Modo Análise — Eventos de Rede em Tempo Real")
+        titulo = QLabel("📡 Modo Análise — Eventos de Rede em Tempo Real")
         titulo.setFont(fonte_titulo)
         cab.addWidget(titulo)
         cab.addStretch()
@@ -334,34 +402,50 @@ class PainelEventos(QWidget):
         lbl_lista.setFont(fonte_label)
         l_lista.addWidget(lbl_lista)
 
-        # ── PATCH: QListWidget direto, sem QScrollArea wrapper ──
+        # QListWidget direto, sem QScrollArea wrapper (anti-freeze)
         self.lista_eventos = QListWidget()
         self.lista_eventos.setSpacing(2)
         self.lista_eventos.setWordWrap(True)
         self.lista_eventos.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         l_lista.addWidget(self.lista_eventos)
-        # ────────────────────────────────────────────────────────
 
         splitter.addWidget(w_lista)
 
-        # ── Painel de explicação ──────────────────
+        # ── Painel de explicação pedagógica ───────
         w_expl = QWidget()
         l_expl = QVBoxLayout(w_expl)
         l_expl.setContentsMargins(4, 0, 0, 0)
         l_expl.setSpacing(4)
 
-        lbl_expl = QLabel("Explicação")
+        lbl_expl = QLabel("Análise Pedagógica")
         lbl_expl.setStyleSheet("font-weight:bold;font-size:11px;color:#bdc3c7;")
         l_expl.addWidget(lbl_expl)
 
+        # Botões de nível — 3 abas pedagógicas
         row_niveis = QHBoxLayout()
         self.botoes_nivel = []
         for icone, rotulo, dica in ROTULOS_NIVEL:
             btn = QPushButton(f"{icone} {rotulo}")
             btn.setCheckable(True)
-            btn.setMaximumHeight(26)
+            btn.setMaximumHeight(28)
             btn.setToolTip(dica)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: #12162a;
+                    color: #7f8c8d;
+                    border: 1px solid #1e2d40;
+                    border-radius: 4px;
+                    padding: 4px 10px;
+                    font-size: 10px;
+                }
+                QPushButton:checked {
+                    background: #1e3a5f;
+                    color: #ecf0f1;
+                    border: 1px solid #3498DB;
+                }
+                QPushButton:hover { background: #1a2540; color: #ecf0f1; }
+            """)
             idx = len(self.botoes_nivel)
             btn.clicked.connect(lambda _, n=idx: self._trocar_nivel(n))
             self.botoes_nivel.append(btn)
@@ -436,7 +520,7 @@ class PainelEventos(QWidget):
             )
             return lbl
 
-        lbl_label = QLabel("  Sessão atual:  ")
+        lbl_label = QLabel("📡 Sessão atual:  ")
         lbl_label.setStyleSheet(
             "color:#566573;font-size:10px;border:none;background:transparent;"
         )
@@ -458,6 +542,360 @@ class PainelEventos(QWidget):
         layout.addStretch()
 
         return frame
+
+    # ──────────────────────────────────────────────
+    # Renderização da explicação pedagógica (6 seções)
+    # ──────────────────────────────────────────────
+
+    @staticmethod
+    def _html_cabecalho_secao(chave: str) -> str:
+        """Gera o cabeçalho HTML de uma seção pedagógica."""
+        info = SECOES_PEDAGOGICAS.get(chave, {})
+        cor    = info.get("cor",      "#3498DB")
+        icone  = info.get("icone",    "•")
+        titulo = info.get("titulo",   chave)
+        sub    = info.get("subtitulo", "")
+        return (
+            f"<div style='margin:14px 0 6px 0;border-left:3px solid {cor};"
+            f"padding:4px 10px;background:rgba(0,0,0,0.18);border-radius:0 4px 4px 0;'>"
+            f"<span style='color:{cor};font-weight:bold;font-size:11px;'>"
+            f"{icone} {titulo}</span>"
+            f"<span style='color:#566573;font-size:9px;margin-left:8px;'>"
+            f"{sub}</span>"
+            f"</div>"
+        )
+
+    @staticmethod
+    def _html_conteudo_secao(conteudo: str, cor_borda: str = "#1e2d40") -> str:
+        """Envolve o conteúdo de uma seção em um bloco visual."""
+        if not conteudo or not conteudo.strip():
+            return ""
+        return (
+            f"<div style='background:#080d1a;border:1px solid {cor_borda};"
+            f"border-radius:5px;padding:10px 14px;margin:4px 0 10px 0;"
+            f"font-size:11px;line-height:1.7;color:#ecf0f1;'>"
+            f"{conteudo}"
+            f"</div>"
+        )
+
+    def _renderizar_nivel_0(self, e: dict) -> str:
+        """
+        Nível 0 — Análise: Seções 1 (análise) + 2 (leitura técnica).
+        O conteúdo vem de nivel1 (análise) e nivel2 (técnica).
+        """
+        conteudo_analise = e.get("nivel1", "")
+        conteudo_tecnica = e.get("nivel2", "")
+
+        html = ""
+
+        # Seção 1: Análise
+        if conteudo_analise:
+            html += self._html_cabecalho_secao("analise")
+            html += self._html_conteudo_secao(conteudo_analise, "#1e3a5f")
+
+        # Seção 2: Leitura Técnica
+        if conteudo_tecnica:
+            html += self._html_cabecalho_secao("tecnica")
+            html += self._html_conteudo_secao(conteudo_tecnica, "#1a3a1a")
+
+        if not html:
+            html = "<i style='color:#7f8c8d;'>Análise não disponível para este evento.</i>"
+
+        return html
+
+    def _renderizar_nivel_1(self, e: dict) -> str:
+        """
+        Nível 1 — Risco & Dados: Seções 3 (risco) + 4 (evidência).
+        Risco vem do alerta_seguranca + nivel2; evidência de nivel3.
+        """
+        alerta    = e.get("alerta_seguranca", "")
+        nivel2    = e.get("nivel2", "")
+        evidencia = e.get("nivel3", "")
+
+        html = ""
+
+        # Seção 3: Superfície de Risco
+        # Apresentada apenas quando há alerta real de segurança
+        if alerta:
+            html += self._html_cabecalho_secao("risco")
+            bloco_risco = (
+                f"<div style='background:#200a0a;border:1px solid #E74C3C;"
+                f"border-radius:5px;padding:10px 14px;margin:4px 0 10px 0;'>"
+                f"<b style='color:#E74C3C;'>⚠ Risco identificado:</b><br>"
+                f"<span style='color:#ecf0f1;font-size:11px;line-height:1.7;'>"
+                f"{alerta}</span>"
+                f"</div>"
+            )
+            # Se houver conteúdo técnico complementar sobre o risco, inclui
+            if nivel2 and "risco" in nivel2.lower() or "vulnerab" in nivel2.lower():
+                bloco_risco += self._html_conteudo_secao(nivel2, "#5a0000")
+            html += bloco_risco
+        else:
+            html += self._html_cabecalho_secao("risco")
+            html += (
+                "<div style='background:#0a1a0a;border:1px solid #2a4a2a;"
+                "border-radius:5px;padding:8px 14px;margin:4px 0 10px 0;"
+                "color:#2ECC71;font-size:10px;'>"
+                "✅ Nenhuma superfície de risco crítica identificada neste evento."
+                "</div>"
+            )
+
+        # Seção 4: Evidência Observada
+        if evidencia:
+            html += self._html_cabecalho_secao("evidencia")
+            html += self._html_conteudo_secao(evidencia, "#3a2a00")
+        else:
+            # Monta evidência básica a partir dos campos do evento
+            html += self._html_cabecalho_secao("evidencia")
+            html += self._html_conteudo_secao(
+                self._gerar_evidencia_basica(e), "#1a2a3a"
+            )
+
+        if not html:
+            html = "<i style='color:#7f8c8d;'>Dados de risco não disponíveis.</i>"
+
+        return html
+
+    def _renderizar_nivel_2(self, e: dict) -> str:
+        """
+        Nível 2 — Evidências: Seções 4 (raw) + 5 (operacional) + 6 (ação).
+        Conteúdo principal vem de nivel4 (pacote bruto + interpretação).
+        """
+        nivel4 = e.get("nivel4", "")
+        tipo   = e.get("tipo",   "")
+
+        html = ""
+
+        # Seção 4: Evidência Observada (raw / dump)
+        html += self._html_cabecalho_secao("evidencia")
+        if nivel4:
+            html += (
+                "<div style='background:#000;border:1px solid #1e2d40;"
+                "border-radius:5px;padding:10px 14px;margin:4px 0 10px 0;'>"
+                f"{nivel4}"
+                "</div>"
+            )
+        else:
+            html += (
+                "<div style='background:#0a0f1a;border:1px solid #1e2d40;"
+                "border-radius:5px;padding:10px 14px;margin:4px 0 10px 0;"
+                "color:#7f8c8d;font-size:10px;text-align:center;'>"
+                "Dump bruto disponível apenas para eventos HTTP.<br>"
+                "Acesse um site HTTP (porta 80) para visualizar o pacote completo."
+                "</div>"
+            )
+
+        # Seção 5: Interpretação Operacional
+        html += self._html_cabecalho_secao("operacional")
+        html += self._html_conteudo_secao(
+            self._gerar_interpretacao_operacional(e), "#2a1a4a"
+        )
+
+        # Seção 6: Ação Sugerida (somente quando há contexto relevante)
+        acao = self._gerar_acao_sugerida(e)
+        if acao:
+            html += self._html_cabecalho_secao("acao")
+            html += self._html_conteudo_secao(acao, "#0a2a2a")
+
+        return html
+
+    @staticmethod
+    def _gerar_evidencia_basica(e: dict) -> str:
+        """Gera HTML de evidência básica a partir dos campos do evento."""
+        tipo       = e.get("tipo",           "—")
+        ip_orig    = e.get("ip_envolvido",   "") or e.get("ip_origem", "—")
+        ip_dest    = e.get("ip_destino",     "—")
+        protocolo  = e.get("protocolo",      tipo)
+        tamanho    = e.get("tamanho",        0)
+        porta_dest = e.get("porta_destino",  "—")
+        dominio    = e.get("dominio",        "")
+        ttl        = e.get("ttl",            "")
+        contador   = e.get("contador",       1)
+        ts         = e.get("timestamp",      "")
+
+        def campo(nome, valor, cor="#ecf0f1"):
+            if not valor or valor == "—" or valor == 0:
+                return ""
+            return (
+                f"<tr>"
+                f"<td style='padding:3px 12px 3px 0;color:#7f8c8d;white-space:nowrap;"
+                f"font-size:10px;'>{nome}</td>"
+                f"<td style='padding:3px 0;color:{cor};font-family:Consolas;"
+                f"font-size:10px;'>{valor}</td>"
+                f"</tr>"
+            )
+
+        linhas = (
+            campo("Tipo",           tipo,            "#F39C12") +
+            campo("Timestamp",      ts,              "#7f8c8d") +
+            campo("IP Origem",      ip_orig,         "#3498DB") +
+            campo("IP Destino",     ip_dest,         "#3498DB") +
+            campo("Protocolo",      protocolo,       "#2ECC71") +
+            campo("Porta Destino",  str(porta_dest), "#ecf0f1") +
+            campo("Domínio",        dominio,         "#2ECC71") +
+            campo("Tamanho",        f"{tamanho} bytes" if tamanho else "", "#ecf0f1") +
+            campo("TTL",            str(ttl) if ttl else "", "#9B59B6") +
+            campo("Ocorrências",    str(contador),   "#ecf0f1")
+        )
+
+        if not linhas:
+            return "<i style='color:#566573;'>Campos não disponíveis.</i>"
+
+        return (
+            "<table style='border-collapse:collapse;width:100%;'>"
+            + linhas +
+            "</table>"
+        )
+
+    @staticmethod
+    def _gerar_interpretacao_operacional(e: dict) -> str:
+        """
+        Gera interpretação operacional baseada no tipo de evento.
+        Ensina: o que significa na prática + quando vira problema.
+        """
+        tipo   = e.get("tipo", "")
+        alerta = e.get("alerta_seguranca", "")
+
+        mapa = {
+            "DNS": (
+                "<b>Significado prático:</b> Toda navegação web começa com uma "
+                "consulta DNS — o dispositivo precisa resolver o nome antes de "
+                "abrir qualquer conexão TCP. Volume alto de DNS para domínios "
+                "desconhecidos pode indicar C2 (command and control) ou exfiltração "
+                "via DNS tunneling.<br><br>"
+                "<b>Quando vira problema:</b> DNS sem DNSSEC permite ataques de "
+                "cache poisoning. DNS sobre UDP (porta 53) é legível por qualquer "
+                "nó na rede — revela quais serviços o dispositivo acessa."
+            ),
+            "HTTP": (
+                "<b>Significado prático:</b> Tráfego HTTP em texto puro é "
+                "imediatamente legível por qualquer capturador na mesma rede. "
+                "Credenciais, cookies de sessão e dados de formulário trafegam "
+                "sem proteção alguma.<br><br>"
+                "<b>Quando vira problema:</b> Em redes Wi-Fi abertas ou com ARP "
+                "spoofing ativo, qualquer participante pode interceptar e modificar "
+                "o conteúdo em trânsito (MITM). O único controle efetivo é migrar "
+                "para HTTPS com HSTS habilitado."
+            ),
+            "HTTPS": (
+                "<b>Significado prático:</b> O TLS garante confidencialidade, "
+                "integridade e autenticidade da comunicação. Mesmo capturando todos "
+                "os pacotes, o conteúdo permanece ilegível sem a chave de sessão.<br><br>"
+                "<b>Quando vira problema:</b> Certificados autoassinados ou expirados "
+                "permitem ataques de SSL stripping. O SNI (Server Name Indication) "
+                "ainda revela o hostname — visível mesmo em conexões HTTPS."
+            ),
+            "ARP": (
+                "<b>Significado prático:</b> O ARP opera sem autenticação — qualquer "
+                "dispositivo pode responder a um ARP request, verdadeiro ou não. "
+                "Isso é normal em redes locais, mas cria um vetor de ataque direto.<br><br>"
+                "<b>Quando vira problema:</b> ARP spoofing (gratuitous ARP) permite "
+                "redirecionar o tráfego de qualquer host para o atacante "
+                "transparentemente. Ferramentas como arpspoof fazem isso em segundos."
+            ),
+            "TCP_SYN": (
+                "<b>Significado prático:</b> O three-way handshake TCP estabelece "
+                "estado em ambos os lados antes de qualquer dado trafegar. "
+                "SYNs isolados (sem SYN-ACK de resposta) indicam porta fechada, "
+                "firewall ou host inexistente.<br><br>"
+                "<b>Quando vira problema:</b> Flood de SYNs sem ACK (SYN flood) "
+                "esgota a tabela de conexões half-open do servidor. "
+                "Port scanning gera SYNs sequenciais em várias portas."
+            ),
+            "ICMP": (
+                "<b>Significado prático:</b> ICMP é a camada de diagnóstico do IP — "
+                "usado para ping, traceroute e notificação de erros de roteamento. "
+                "Não carrega dados de aplicação.<br><br>"
+                "<b>Quando vira problema:</b> ICMP pode ser usado para tunneling "
+                "(dados ocultos no payload do Echo Request). "
+                "Volume incomum de ICMP pode indicar varredura ou flood."
+            ),
+            "DHCP": (
+                "<b>Significado prático:</b> O DHCP distribui configuração de rede "
+                "automaticamente. Um único servidor DHCP responde a todos os clientes "
+                "da rede sem autenticação mútua.<br><br>"
+                "<b>Quando vira problema:</b> Rogue DHCP server pode distribuir "
+                "gateway e DNS falsos, redirecionando todo o tráfego da vítima. "
+                "Detectável monitorando DISCOVERs sem OFFER legítimo."
+            ),
+        }
+
+        texto_base = mapa.get(tipo, (
+            "<b>Significado prático:</b> Evento de rede capturado e classificado "
+            "pelo analisador. Verifique os campos de evidência para mais detalhes."
+        ))
+
+        # Adiciona aviso de alerta se presente
+        if alerta:
+            texto_base += (
+                f"<br><br><div style='background:#1a0a0a;border-left:3px solid #E74C3C;"
+                f"padding:6px 10px;border-radius:3px;color:#ffb3b3;font-size:10px;'>"
+                f"<b>⚠ Alerta ativo:</b> {alerta}</div>"
+            )
+
+        return texto_base
+
+    @staticmethod
+    def _gerar_acao_sugerida(e: dict) -> str:
+        """
+        Gera ação sugerida apenas quando há contexto de risco real.
+        Sempre com justificativa técnica.
+        """
+        tipo   = e.get("tipo", "")
+        alerta = e.get("alerta_seguranca", "")
+
+        # Só gera ação quando há risco identificado ou protocolo inseguro
+        acoes = {
+            "HTTP": (
+                "<b>O que fazer:</b><br>"
+                "• Migre para HTTPS com certificado válido (Let's Encrypt é gratuito)<br>"
+                "• Habilite HSTS (<code>Strict-Transport-Security</code>) para forçar "
+                "HTTPS em acessos futuros<br>"
+                "• Monitore requisições HTTP na porta 80 — qualquer login via HTTP "
+                "é uma credencial exposta<br><br>"
+                "<b>Por que isso resolve:</b> O TLS cifra o payload completo "
+                "(headers + corpo + cookies) antes de sair do socket, tornando "
+                "a interceptação inútil sem a chave de sessão."
+            ),
+            "ARP": (
+                "<b>O que fazer:</b><br>"
+                "• Execute <code>arp -a</code> periodicamente e compare com o mapa "
+                "esperado da rede<br>"
+                "• Em ambientes críticos, use ARP dinâmico com DAI (Dynamic ARP "
+                "Inspection) em switches gerenciados<br>"
+                "• Monitore entradas duplicadas na tabela ARP "
+                "(mesmo IP, MACs diferentes)<br><br>"
+                "<b>Por que isso resolve:</b> DAI valida cada ARP reply contra a "
+                "tabela DHCP snooping, descartando respostas não autorizadas."
+            ),
+            "DHCP": (
+                "<b>O que fazer:</b><br>"
+                "• Habilite DHCP snooping no switch para limitar quais portas "
+                "podem originar respostas DHCP<br>"
+                "• Monitore o syslog do servidor DHCP para concessões inesperadas<br>"
+                "• Use 802.1X para autenticar dispositivos antes de conceder "
+                "acesso à rede<br><br>"
+                "<b>Por que isso resolve:</b> DHCP snooping cria uma tabela de "
+                "portas confiáveis; ofertas de portas não confiáveis são descartadas "
+                "silenciosamente pelo switch."
+            ),
+        }
+
+        # Retorna ação se o tipo tiver contexto de risco OU se há alerta ativo
+        if tipo in acoes:
+            return acoes[tipo]
+
+        if alerta:
+            return (
+                "<b>O que fazer:</b><br>"
+                f"• Investigue o alerta: <i>{alerta[:120]}</i><br>"
+                "• Correlacione com outros eventos do mesmo IP no histórico<br>"
+                "• Considere isolar o dispositivo origem se o comportamento persistir<br><br>"
+                "<b>O que monitorar:</b> frequência do evento, variação de IP/MAC "
+                "de origem, horário dos picos."
+            )
+
+        return ""  # Sem ação para eventos normais sem risco
 
     # ──────────────────────────────────────────────
     # Renderização dos Insights (diff incremental)
@@ -534,13 +972,13 @@ class PainelEventos(QWidget):
         layout.setSpacing(8)
 
         cab = QHBoxLayout()
-        titulo = QLabel("  Classificação de Uso da Rede")
+        titulo = QLabel("Classificação de Uso da Rede")
         titulo.setStyleSheet("color:#F39C12;font-weight:bold;font-size:11px;")
         cab.addWidget(titulo)
         cab.addStretch()
         layout.addLayout(cab)
 
-        contagens    = self.painel_contadores.obter_contagens()
+        contagens     = self.painel_contadores.obter_contagens()
         total_eventos = sum(contagens.values()) or 1
 
         if not contagens:
@@ -601,7 +1039,7 @@ class PainelEventos(QWidget):
         layout.setSpacing(8)
 
         cab = QHBoxLayout()
-        titulo = QLabel("  Domínios Mais Acessados")
+        titulo = QLabel(" Domínios Mais Acessados")
         titulo.setStyleSheet("color:#2ECC71;font-weight:bold;font-size:11px;")
         cab.addWidget(titulo)
         cab.addStretch()
@@ -611,7 +1049,7 @@ class PainelEventos(QWidget):
         ))
         layout.addLayout(cab)
 
-        sub = QLabel("Baseado em consultas DNS reais")
+        sub = QLabel("Baseado em consultas DNS reais capturadas")
         sub.setStyleSheet("color:#4a6a8a;font-size:9px;")
         layout.addWidget(sub)
 
@@ -723,8 +1161,8 @@ class PainelEventos(QWidget):
     # ──────────────────────────────────────────────
 
     def atualizar_insights(self, top_dns: list, historias: list):
-        self._ultimo_top_dns    = top_dns
-        self._ultimo_historias  = historias
+        self._ultimo_top_dns   = top_dns
+        self._ultimo_historias = historias
 
         chave = f"{len(top_dns)}:{sum(d.get('acessos', 0) for d in top_dns)}"
         if chave == getattr(self, '_ultima_chave_dns', ''):
@@ -745,6 +1183,7 @@ class PainelEventos(QWidget):
         self._contagem_sessao[sessao][tipo] += 1
         dados["contador_sessao"] = self._contagem_sessao[sessao][tipo]
 
+        # Corrige encoding em todos os campos de texto
         for campo in ("titulo", "nivel1", "nivel2", "nivel3", "nivel4",
                       "alerta_seguranca", "fluxo_visual"):
             if campo in dados:
@@ -789,8 +1228,8 @@ class PainelEventos(QWidget):
         self.lbl_rodape.setText("Nenhum evento registrado.")
         self._exibir_boas_vindas()
 
-        self._ultimo_top_dns.clear()
-        self._ultimo_historias.clear()
+        self._ultimo_top_dns      = []
+        self._ultimo_historias    = []
         self._ultima_chave_dns          = ""
         self._chave_render_anterior     = ""
         self._ultima_chave_filtro       = None
@@ -829,9 +1268,8 @@ class PainelEventos(QWidget):
     def _reaplicar_filtros(self):
         """
         Reconstrói a lista filtrada.
-        Guard de chave: evita trabalho redundante se nada mudou.
-        Exibe apenas os últimos _LIMITE_LISTA_WIDGETS eventos para não
-        travar a UI ao trocar de aba após captura prolongada.
+        Guard de chave — evita reconstrução redundante se nada mudou.
+        Exibe apenas os últimos _LIMITE_LISTA_WIDGETS eventos (anti-freeze).
         """
         chave = (
             len(self._todos_eventos),
@@ -875,11 +1313,8 @@ class PainelEventos(QWidget):
     def _adicionar_cartao(self, dados: dict):
         """
         Adiciona um cartão ao QListWidget.
-
-        PATCH v3.1:
-          • Cap de _LIMITE_LISTA_WIDGETS widgets: remove o mais antigo (índice 0)
-            com takeItem() — O(1), sem recriar a lista inteira.
-          • Usa scrollToBottom() nativo do QListWidget (sem QScrollArea).
+        Cap de _LIMITE_LISTA_WIDGETS: remove o mais antigo (índice 0)
+        com takeItem() — O(1), sem recriar a lista.
         """
         item   = QListWidgetItem()
         widget = CartaoEvento(dados)
@@ -887,11 +1322,10 @@ class PainelEventos(QWidget):
         self.lista_eventos.addItem(item)
         self.lista_eventos.setItemWidget(item, widget)
 
-        # Remove o mais antigo se ultrapassar o limite
+        # Remove o mais antigo se ultrapassar o limite (anti-freeze)
         while self.lista_eventos.count() > _LIMITE_LISTA_WIDGETS:
             self.lista_eventos.takeItem(0)
 
-        # Scroll nativo — sem referência a QScrollArea
         self.lista_eventos.scrollToBottom()
 
         dados_ref = dados
@@ -909,6 +1343,13 @@ class PainelEventos(QWidget):
             self._renderizar_explicacao()
 
     def _renderizar_explicacao(self):
+        """
+        Renderiza a explicação pedagógica estruturada do evento atual.
+        Cada nível exibe um subconjunto das 6 seções:
+          Nível 0 "Análise"       → seções 1 + 2
+          Nível 1 "Risco & Dados" → seções 3 + 4
+          Nível 2 "Evidências"    → seções 4 + 5 + 6
+        """
         if not self._evento_atual or not self._evento_atual.get("titulo"):
             return
 
@@ -926,93 +1367,128 @@ class PainelEventos(QWidget):
         estilo = ESTILOS_NIVEL.get(nivel, ESTILOS_NIVEL["INFO"])
         cor    = estilo["borda"]
 
-        chaves_nivel = ["nivel1", "nivel2", "nivel4"]
-        rotulo       = ROTULOS_NIVEL[self._nivel_atual]
+        icone_nivel, rotulo_nivel, _ = ROTULOS_NIVEL[self._nivel_atual]
 
-        if self._nivel_atual == 2:
-            conteudo = e.get("nivel4", "")
-            if not conteudo:
-                conteudo = (
-                    "<div style='text-align:center;padding:40px;color:#7f8c8d;'>"
-                    "<b>Pacote Bruto</b> está disponível apenas para eventos HTTP.<br><br>"
-                    "Acesse um site HTTP (porta 80) e envie um formulário para "
-                    "visualizar o conteúdo exato do pacote."
-                    "</div>"
-                )
+        # Gera o conteúdo das seções para o nível selecionado
+        if self._nivel_atual == 0:
+            corpo_secoes = self._renderizar_nivel_0(e)
+        elif self._nivel_atual == 1:
+            corpo_secoes = self._renderizar_nivel_1(e)
         else:
-            conteudo = e.get(chaves_nivel[self._nivel_atual], "Indisponível.")
+            corpo_secoes = self._renderizar_nivel_2(e)
 
         ip_linha = ip_src
         if ip_dst and ip_dst != ip_src:
             ip_linha += f" → {ip_dst}"
 
+        # Bloco de fluxo visual
         bloco_fluxo = ""
         if fluxo:
             bloco_fluxo = (
-                f"<div style='font-family:Consolas;font-size:11px;"
-                f"background:#0d1520;padding:8px 14px;"
+                f"<div style='font-family:Consolas;font-size:10px;"
+                f"background:#0d1520;padding:7px 14px;"
                 f"border-radius:5px;color:#ecf0f1;margin:8px 0;"
                 f"border-left:3px solid {cor};'>"
                 f"{fluxo}</div>"
             )
 
+        # Bloco de alerta de segurança (visível em todos os níveis)
         bloco_alerta = ""
-        if alerta:
+        if alerta and self._nivel_atual == 0:
             bloco_alerta = (
-                f"<div style='background:#2a0a00;border:1px solid #E74C3C;"
-                f"border-radius:5px;padding:10px 14px;margin:8px 0;'>"
+                f"<div style='background:#1a0a00;border:1px solid #E74C3C;"
+                f"border-radius:5px;padding:8px 14px;margin:8px 0;'>"
                 f"<b style='color:#E74C3C;'>⚠ ALERTA DE SEGURANÇA:</b><br>"
-                f"<span style='color:#ecf0f1;'>{alerta}</span>"
+                f"<span style='color:#ffb3b3;font-size:10px;'>{alerta}</span>"
                 f"</div>"
             )
 
         html = f"""
         <div style="font-family:Arial,sans-serif;font-size:11px;
                     line-height:1.7;color:#ecf0f1;">
+
+          <!-- Cabeçalho do evento -->
           <h3 style="color:{cor};margin:0 0 4px 0;">{titulo}</h3>
-          <p style="color:#7f8c8d;font-size:10px;margin:0 0 10px 0;">
-             {hora} &nbsp;·&nbsp;
+          <p style="color:#7f8c8d;font-size:10px;margin:0 0 8px 0;">
+             {hora}
+            &nbsp;·&nbsp;
             <code style="color:#3498DB;">{ip_linha}</code>
             &nbsp;·&nbsp; Ocorrências: <b>{cont}</b>
-            &nbsp;·&nbsp; Nesta sessão: <b>{cont_s}</b>
+            &nbsp;·&nbsp; Sessão: <b>{cont_s}</b>
+            &nbsp;·&nbsp;
+            <span style="color:{cor};font-size:9px;">{icone_nivel} {rotulo_nivel}</span>
           </p>
+
           {bloco_fluxo}
           {bloco_alerta}
-          <div style="background:#0d1520;border-left:3px solid {cor};
-                      border-radius:4px;padding:12px 16px;margin:8px 0;">
-            <b style="color:{cor};font-size:10px;">
-              {rotulo[0]} {rotulo[1]} — {rotulo[2]}
-            </b><br><br>
-            {conteudo}
-          </div>
+
+          <!-- Seções pedagógicas do nível selecionado -->
+          {corpo_secoes}
+
         </div>
         """
+
         self.texto_explicacao.setHtml(html)
 
     def _exibir_boas_vindas(self):
         self.texto_explicacao.setHtml("""
         <div style="font-family:Arial,sans-serif;font-size:11px;
-                    line-height:1.7;color:#ecf0f1;padding:4px;">
-          <h3 style="color:#3498DB;margin:0 0 10px 0;">
-             Bem-vindo ao Modo Análise
+                    line-height:1.8;color:#ecf0f1;padding:4px;">
+
+          <h3 style="color:#3498DB;margin:0 0 12px 0;">
+            📡 Modo Análise — Análise Pedagógica em Tempo Real
           </h3>
-          <p>Este painel transforma pacotes reais capturados da rede em
-          <b>explicações didáticas automáticas</b> em três níveis de
-          profundidade.</p>
-          <p><b>Como usar:</b><br>
-          1. Clique em <b>Iniciar Captura</b> na barra superior<br>
-          2. Acesse sites no navegador para gerar tráfego<br>
-          3. Os eventos aparecerão aqui automaticamente<br>
-          4. Clique em qualquer evento para ver a explicação<br>
-          5. Use os botões abaixo para trocar o nível de detalhe</p>
-          <p><b>Os três níveis de explicação:</b><br>
-          <b>Simples</b> — linguagem do dia a dia, sem jargão técnico<br>
-          <b>Técnico</b> — protocolos, portas, vulnerabilidades<br>
-          <b>Pacote Bruto</b> — conteúdo exato transmitido na rede
-          (exclusivo para HTTP)</p>
-          <p style="color:#7f8c8d;font-size:10px;">
-            Acesse a aba <b>Insights</b> para ver quais sites foram
-            acessados e o tipo de uso da rede (atualizado a cada 30 s).
+
+          <p style="color:#9fb2c8;">
+            Este painel funciona como um <b>analista de redes experiente</b>
+            que comenta cada evento à medida que ele ocorre — combinando
+            interpretação técnica com ensino aplicado.
           </p>
+
+          <p style="color:#9fb2c8;">
+            <b>Como usar:</b><br>
+            1. Clique em <b>Iniciar Captura</b> na barra superior<br>
+            2. Acesse sites no navegador para gerar tráfego real<br>
+            3. Clique em qualquer evento da lista para ver a análise<br>
+            4. Use as três abas para navegar pelas 6 seções pedagógicas
+          </p>
+
+          <div style="background:#0d1a2a;border:1px solid #1e3a5f;
+                      border-radius:6px;padding:12px 16px;margin:10px 0;">
+            <b style="color:#3498DB;font-size:10px;">
+               Aba "Análise" — Seções 1 e 2
+            </b><br>
+            <span style="color:#7f8c8d;font-size:10px;">
+              O que aconteceu · Por que aconteceu · Como o protocolo funciona
+            </span>
+          </div>
+
+          <div style="background:#1f1200;border:1px solid #3a2000;
+                      border-radius:6px;padding:12px 16px;margin:6px 0;">
+            <b style="color:#E67E22;font-size:10px;">
+              ⚠ Aba "Risco &amp; Dados" — Seções 3 e 4
+            </b><br>
+            <span style="color:#7f8c8d;font-size:10px;">
+              Superfície de risco · Como a vulnerabilidade ocorre ·
+              Evidência observada com interpretação de campos
+            </span>
+          </div>
+
+          <div style="background:#0a0a1a;border:1px solid #1e1e40;
+                      border-radius:6px;padding:12px 16px;margin:6px 0;">
+            <b style="color:#9B59B6;font-size:10px;">
+               Aba "Evidências" — Seções 4, 5 e 6
+            </b><br>
+            <span style="color:#7f8c8d;font-size:10px;">
+              Dump bruto do pacote · Interpretação operacional ·
+              Ação sugerida com justificativa técnica
+            </span>
+          </div>
+
+          <p style="color:#566573;font-size:10px;margin-top:10px;">
+            Acesse a aba <b>Insights</b> para ver os domínios acessados
+            e a classificação de uso da rede em tempo real.
+          </p>
+
         </div>
         """)
