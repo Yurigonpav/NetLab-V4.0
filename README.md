@@ -51,7 +51,7 @@ O ensino de redes frequentemente esbarra em uma barreira: ferramentas profission
 - **Capturar tráfego real** da rede local sem intermediários
 - **Explicar automaticamente** cada evento em linguagem simples, técnica ou como dump bruto
 - **Visualizar a topologia** da rede de forma interativa e intuitiva
-- **Demonstrar vulnerabilidades** de segurança de forma controlada e didática (HTTP vs HTTPS, força bruta, DoS)
+- **Demonstrar vulnerabilidades** de segurança de forma controlada e didática (HTTP vs HTTPS, DoS)
 
 ---
 
@@ -107,17 +107,16 @@ O ensino de redes frequentemente esbarra em uma barreira: ferramentas profission
 
 ### Servidor HTTP Embutido para Demonstrações
 - Servidor multi-threaded (`ThreadingMixIn`) com páginas de login, cadastro e formulário
-- **Modo Vulnerável**: senha em texto puro, sem limites — demonstra como credenciais aparecem capturadas
-- **Modo Seguro**: hash PBKDF2+salt, rate limiting por IP (janela deslizante de 1s), bloqueio temporário e CAPTCHA após 3 falhas
-- Cadastro de usuários em runtime em ambos os modos
-- Proteção contra DoS com controle de req/s por IP, bloqueio automático e desbloqueio manual
+- **Modo Vulnerável** (único modo): senha armazenada em texto puro, sem limitação de tentativas — demonstra como credenciais aparecem visivelmente na captura de pacotes HTTP
+- Proteção didática contra DoS: rate limiting por IP (janela deslizante de 1s) com bloqueio temporário configurável
+- Cadastro de usuários em runtime com senha em texto puro (propositalmente inseguro para fins educacionais)
 - Monitoramento de requisições em tempo real com tabela e log de alertas didáticos
 - Silenciamento de BrokenPipeError/ConnectionResetError esperados em testes de carga
 
 ### Identificação de Fabricantes (OUI)
 - Base OUI embutida com centenas de fabricantes mapeados manualmente
 - Integração com a biblioteca `manuf` para cobertura ampliada
-- **Atualização online** da base via base do Wireshark com um clique (Menu Monitoramento → Atualizar Base de Fabricantes)
+- **Atualização online** da base via Wireshark com um clique (Menu Monitoramento → Atualizar Base de Fabricantes)
 - Apelidos personalizados por dispositivo persistidos em JSON local
 
 ---
@@ -183,7 +182,6 @@ O NetLab é organizado em **três camadas de performance** para garantir que a i
 | **Scapy** | 2.x | Captura e decodificação de pacotes de rede |
 | **PyQtGraph** | latest | Gráfico de tráfego em tempo real (alto desempenho) |
 | **manuf** | latest | Base OUI de fabricantes do Wireshark |
-| **ReportLab** | latest | Geração de relatórios PDF |
 | **Npcap** | 1.87+ | Driver de captura de pacotes para Windows |
 | **GCC / MSVC** | — | Compilação dos módulos C nativos |
 | **PyInstaller** | latest | Empacotamento do executável `.exe` |
@@ -197,12 +195,12 @@ O NetLab é organizado em **três camadas de performance** para garantir que a i
 |---|---|
 | Processador | Intel Core i3 ou equivalente (≥ 1,5 GHz) |
 | Memória RAM | 4 GB (recomendado: 8 GB) |
-| Espaço em Disco | 500 MB disponíveis |
+| Espaço em Disco | 300 MB disponíveis |
 | Resolução | 1280 × 720 pixels |
 
 ### Software
 - **Windows 10 (64 bits)** ou superior
-- **Npcap 1.87+** com *WinPcap API-compatible mode* ativado
+- **Npcap 1.87+** instalado na máquina
 - **Microsoft Visual C++ Redistributable x64**
 
 > ⚠️ **Obrigatório:** O NetLab deve ser executado com **privilégios de Administrador**. Sem isso, o driver Npcap não consegue capturar pacotes no nível de hardware.
@@ -211,17 +209,9 @@ O NetLab é organizado em **três camadas de performance** para garantir que a i
 
 ## Instalação
 
-### Opção 1 — Instalador Automático (Recomendado)
+### A partir do Código-Fonte
 
-1. Baixe o arquivo `NetLab_Setup.exe`
-2. Clique com o **botão direito** → **Executar como administrador**
-3. Siga o assistente de instalação
-4. Na tela do Npcap, certifique-se de marcar **"WinPcap API-compatible mode"**
-5. Ao finalizar, marque **"Executar NetLab"** e clique em **Concluir**
-
-### Opção 2 — A partir do Código-Fonte
-
-**Pré-requisitos:** Python 3.11, Git, GCC (MinGW no Windows)
+**Pré-requisitos:** Python 3.11, Git, GCC (MinGW no Windows) e Npcap instalado.
 
 ```bash
 # 1. Clone o repositório
@@ -245,11 +235,10 @@ PyQt6
 scapy
 pyqtgraph
 cryptography
-reportlab
 manuf
 ```
 
-### Opção 3 — Build do Executável
+### Build do Executável
 
 ```bash
 # Gera o executável na pasta dist\NetLab\
@@ -306,9 +295,13 @@ Para cada evento capturado (DNS, HTTP, HTTPS, ARP, TCP, etc.):
 1. Vá para a aba "Servidor"
 2. Clique em "Iniciar Servidor" (porta padrão: 8080)
 3. Acesse http://<seu-IP>:8080/login de outro dispositivo na mesma rede
-4. Modo VULNERÁVEL: faça login — observe as credenciais em texto puro no Modo Análise
-5. Modo SEGURO: ative o modo seguro e refaça — as proteções entram em ação
+4. Faça login — observe as credenciais trafegando em TEXTO PURO no Modo Análise
+5. Compare com uma conexão HTTPS para mostrar a diferença na captura
 ```
+
+> 🎓 **Objetivo didático:** o servidor opera propositalmente sem criptografia
+> para que os alunos visualizem, na captura ao vivo, como senhas e dados
+> pessoais ficam expostos quando HTTP é utilizado no lugar de HTTPS.
 
 ### 5. Identificação de Fabricantes
 
@@ -340,8 +333,7 @@ netlab-educacional/
 │   ├── janela_principal.py      # Janela principal, timers, controle de captura
 │   ├── painel_topologia.py      # Visualizador de topologia interativo (PyQt6)
 │   ├── painel_trafego.py        # Gráfico histórico KB/s, navegação temporal, EMA
-│   ├── painel_eventos.py        # Modo Análise — eventos, filtros, Insights
-│   └── painel_login.py          # Laboratório de login vulnerável (educacional)
+│   └── painel_eventos.py        # Modo Análise — eventos, filtros, Insights
 │
 ├── utils/
 │   ├── constantes.py            # Portas, classificações, constantes globais
@@ -385,7 +377,6 @@ Para cada tipo de evento, o `MotorPedagogico` gera explicações ricas com os da
 - Estimativa de **sistema operacional** pelo TTL (Windows=128, Linux=64, Embedded=32)
 - Identificação de **fabricante** pelo OUI (3 primeiros bytes do MAC)
 - **Hexdump** dos primeiros 2.048 bytes do payload com visualização ASCII
-- **Hook educacional HTTP** fail-safe: analisa payloads mesmo sem credenciais explícitas e registra alertas internos
 
 ### Concorrência e Threading
 
