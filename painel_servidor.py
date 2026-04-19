@@ -562,7 +562,7 @@ class HandlerLabEducacional(BaseHTTPRequestHandler):
         corpo = (
             b"<html><body style='background:#0f1423;color:#E74C3C;"
             b"font-family:Arial;padding:40px;text-align:center;'>"
-            b"<h2>🚫 Acesso Bloqueado</h2>"
+            b"<h2>Acesso Bloqueado</h2>"
             b"<p>Seu IP foi temporariamente bloqueado por excesso de requisicoes.</p>"
             b"<p style='color:#7f8c8d;'>Esta e uma demonstracao educacional de "
             b"protecao contra DoS.</p>"
