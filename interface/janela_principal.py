@@ -805,7 +805,7 @@ class JanelaPrincipal(QMainWindow):
         self.lbl_ip.setStyleSheet("color:#2ecc71; font-weight:bold;")
         barra.addWidget(self.lbl_ip)
 
-        btn_diag = QPushButton("🔍 Diagnóstico")
+        btn_diag = QPushButton("Diagnóstico")
         btn_diag.setToolTip("Exibe informações de diagnóstico da captura atual")
         btn_diag.clicked.connect(self._exibir_diagnostico_captura)
         barra.addWidget(btn_diag)
