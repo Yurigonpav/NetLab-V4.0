@@ -53,7 +53,7 @@ ESTILOS_NIVEL = {
 # Abas de nível: (ícone, rótulo, tooltip)
 ROTULOS_NIVEL = [
     ("", "Análise",        "Análise do evento + leitura técnica do protocolo"),
-    ("", "Risco & Dados",  "Superfície de risco + evidência observada com interpretação"),
+    ("", "Risco e Dados",  "Superfície de risco + evidência observada com interpretação"),
     ("", "Evidências",     "Dump bruto do pacote + interpretação operacional + ação sugerida"),
 ]
 
@@ -63,37 +63,37 @@ SECOES_PEDAGOGICAS = {
         "titulo":   "1. Análise",
         "subtitulo": "O que aconteceu · Por que aconteceu · Conclusão",
         "cor":      "#3498DB",
-        "icone":    "📊",
+        "icone":    "",
     },
     "tecnica": {
         "titulo":   "2. Leitura Técnica",
         "subtitulo": "Como o protocolo funciona · Conceitos aplicados ao caso",
         "cor":      "#2ECC71",
-        "icone":    "⚙️",
+        "icone":    "",
     },
     "risco": {
         "titulo":   "3. Superfície de Risco",
         "subtitulo": "O que pode dar errado · Como a vulnerabilidade ocorre",
         "cor":      "#E74C3C",
-        "icone":    "⚠",
+        "icone":    "",
     },
     "evidencia": {
         "titulo":   "4. Evidência Observada",
         "subtitulo": "Campos do evento · Significado de cada campo",
         "cor":      "#F39C12",
-        "icone":    "🔍",
+        "icone":    "",
     },
     "operacional": {
         "titulo":   "5. Interpretação Operacional",
         "subtitulo": "O que significa na prática · Quando vira problema",
         "cor":      "#9B59B6",
-        "icone":    "🎯",
+        "icone":    "",
     },
     "acao": {
         "titulo":   "6. Ação Sugerida",
         "subtitulo": "O que fazer · Por que · O que monitorar",
         "cor":      "#1ABC9C",
-        "icone":    "✅",
+        "icone":    "",
     },
 }
 
@@ -321,7 +321,7 @@ class PainelEventos(QWidget):
         cab = QHBoxLayout()
         fonte_titulo = QFont("Arial", 12)
         fonte_titulo.setBold(True)
-        titulo = QLabel("📡 Modo Análise — Eventos de Rede em Tempo Real")
+        titulo = QLabel("Modo Análise — Eventos de Rede em Tempo Real")
         titulo.setFont(fonte_titulo)
         cab.addWidget(titulo)
         cab.addStretch()
@@ -636,7 +636,7 @@ class PainelEventos(QWidget):
                 "<div style='background:#0a1a0a;border:1px solid #2a4a2a;"
                 "border-radius:5px;padding:8px 14px;margin:4px 0 10px 0;"
                 "color:#2ECC71;font-size:10px;'>"
-                "✅ Nenhuma superfície de risco crítica identificada neste evento."
+                " Nenhuma superfície de risco crítica identificada neste evento."
                 "</div>"
             )
 
@@ -955,7 +955,7 @@ class PainelEventos(QWidget):
             f"color:{cor_alerta};font-size:10px;font-family:Consolas;padding:0 14px 0 0;"
         )
         self._lbl_resumo_alertas.setText(
-            f"{'⚠ ' if alertas > 0 else ''}{alertas} alerta(s)"
+            f"{' ' if alertas > 0 else ''}{alertas} alerta(s)"
         )
         self._lbl_resumo_insights.setText(
             f"{eventos} eventos · {consultas_dns} consultas DNS"
