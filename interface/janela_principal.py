@@ -764,13 +764,13 @@ class JanelaPrincipal(QMainWindow):
 
         m_mon = menu.addMenu("&Monitoramento")
         self.acao_captura = QAction("Iniciar Captura", self)
-        self.acao_captura.setShortcut("F5")
+        self.acao_captura.setShortcut("F10")
         self.acao_captura.triggered.connect(self._alternar_captura)
         m_mon.addAction(self.acao_captura)
 
         # ── Menu: Atualizar base OUI ──────────────────────────────────────
         m_mon.addSeparator()
-        a_atualizar_oui = QAction("🔄 Atualizar Base de Fabricantes", self)
+        a_atualizar_oui = QAction("Atualizar Base de Fabricantes", self)
         a_atualizar_oui.setToolTip(
             "Baixa a base OUI mais recente do Wireshark (requer internet).\n"
             "A identificação de fabricantes em dispositivos novos será aprimorada."

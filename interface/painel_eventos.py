@@ -261,7 +261,7 @@ class PainelContadores(QWidget):
 
 class PainelEventos(QWidget):
     """
-    Painel completo do Modo Análise com estrutura pedagógica de 6 seções.
+    Painel completo do Modo Análise com estrutura gpedaógica de 6 seções.
 
     ESTRUTURA PEDAGÓGICA (professor-analista):
     ─────────────────────────────────────────
@@ -418,7 +418,7 @@ class PainelEventos(QWidget):
         l_expl.setContentsMargins(4, 0, 0, 0)
         l_expl.setSpacing(4)
 
-        lbl_expl = QLabel("Análise Pedagógica")
+        lbl_expl = QLabel("Análise")
         lbl_expl.setStyleSheet("font-weight:bold;font-size:11px;color:#bdc3c7;")
         l_expl.addWidget(lbl_expl)
 
@@ -520,7 +520,7 @@ class PainelEventos(QWidget):
             )
             return lbl
 
-        lbl_label = QLabel("📡 Sessão atual:  ")
+        lbl_label = QLabel("Sessão atual:  ")
         lbl_label.setStyleSheet(
             "color:#566573;font-size:10px;border:none;background:transparent;"
         )
@@ -1436,7 +1436,7 @@ class PainelEventos(QWidget):
                     line-height:1.8;color:#ecf0f1;padding:4px;">
 
           <h3 style="color:#3498DB;margin:0 0 12px 0;">
-            📡 Modo Análise — Análise Pedagógica em Tempo Real
+             Modo Análise — Análise em Tempo Real
           </h3>
 
           <p style="color:#9fb2c8;">
