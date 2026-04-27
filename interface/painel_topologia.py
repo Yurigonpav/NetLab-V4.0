@@ -222,6 +222,10 @@ class VisualizadorTopologia(QWidget):
     RAIO_MIN        = 7
     RAIO_MAX        = 30
     MAX_DISPOSITIVOS = 50
+    # Limite máximo de pares de conexão armazenados.
+    # Sem limite, este dicionário cresce indefinidamente durante a sessão
+    # e o repaint de _pintar_conexoes (que ordena tudo) fica cada vez mais pesado.
+    MAX_CONEXOES_ARMAZENADAS = 300
     TIMEOUT_INATIVIDADE = 1800
 
     _MACS_INVALIDOS = frozenset({
@@ -256,9 +260,15 @@ class VisualizadorTopologia(QWidget):
         self.on_no_clicado = None
 
         self._fase_animacao = 0
-        timer = QTimer(self)
-        timer.timeout.connect(self._passo_animacao)
-        timer.start(33)
+        # Cache da lista de conexões ordenada — re-ordenar 300 pares a cada
+        # 8ms seria desnecessário. A lista só é reconstruída quando o dicionário
+        # de conexões sofre alteração (flag _cache_conexoes_invalido).
+        self._cache_conexoes_ordenadas: list = []
+        self._cache_conexoes_invalido:  bool = True
+
+        self._timer_animacao = QTimer(self)
+        self._timer_animacao.timeout.connect(self._passo_animacao)
+        self._timer_animacao.start(33)  # alvo 30fps (original)
 
         self._timer_layout = QTimer(self)
         self._timer_layout.setSingleShot(True)
@@ -438,7 +448,17 @@ class VisualizadorTopologia(QWidget):
                 return
 
         chave = tuple(sorted([no_a, no_b]))
+
+        # Evita crescimento ilimitado: remove o par menos frequente quando
+        # o dicionário atinge o limite. O par mais raro tem menos relevância visual.
+        if chave not in self.contagem_conexoes and \
+                len(self.contagem_conexoes) >= self.MAX_CONEXOES_ARMAZENADAS:
+            par_mais_raro = min(self.contagem_conexoes, key=self.contagem_conexoes.get)
+            del self.contagem_conexoes[par_mais_raro]
+
         self.contagem_conexoes[chave] += 1
+        # Invalida o cache — a ordem por frequência mudou
+        self._cache_conexoes_invalido = True
 
         with self._lock_dispositivos:
             if porta_destino and no_b in self.dispositivos:
@@ -556,6 +576,9 @@ class VisualizadorTopologia(QWidget):
         self._ultimo_trafego.clear()
         self._no_selecionado = None
         self._no_hover = None
+        # Reseta o cache junto com o dicionário
+        self._cache_conexoes_ordenadas = []
+        self._cache_conexoes_invalido  = True
         self.update()
 
     # ── Gerenciamento de dispositivos (expiração e limite prático) ────────
@@ -742,13 +765,19 @@ class VisualizadorTopologia(QWidget):
         if not self.contagem_conexoes:
             return
 
-        top = sorted(
-            self.contagem_conexoes.items(),
-            key=lambda x: x[1], reverse=True
-        )
-        maximo = top[0][1] if top else 1
+        # Usa o cache — só re-ordena quando _cache_conexoes_invalido for True.
+        # Isso significa que a ordenação acontece quando conexões mudam
+        # (a cada ~400ms), não a cada frame (a cada 8ms).
+        if self._cache_conexoes_invalido:
+            self._cache_conexoes_ordenadas = sorted(
+                self.contagem_conexoes.items(),
+                key=lambda x: x[1], reverse=True
+            )
+            self._cache_conexoes_invalido = False
 
-        for (no_a, no_b), contagem in top:
+        maximo = self._cache_conexoes_ordenadas[0][1] if self._cache_conexoes_ordenadas else 1
+
+        for (no_a, no_b), contagem in self._cache_conexoes_ordenadas:
             if no_a not in self._posicoes_mundo or no_b not in self._posicoes_mundo:
                 continue
 
@@ -1180,6 +1209,11 @@ class VisualizadorTopologia(QWidget):
         )
 
     def _passo_animacao(self):
+        # Não repinta se o widget não está visível — economiza CPU
+        # quando o usuário está em outra aba.
+        if not self.isVisible():
+            self._fase_animacao += 1
+            return
         self._fase_animacao += 1
         if self._ip_local and self._ip_local in self._posicoes_mundo:
             self.update()

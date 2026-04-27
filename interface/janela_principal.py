@@ -1,4 +1,4 @@
-﻿
+
 # interface/janela_principal.py
 
 import threading
@@ -68,6 +68,18 @@ class EstadoRede:
             if chave in self.ultimos_eventos:
                 if agora - self.ultimos_eventos[chave] < cooldown:
                     return False
+
+            # Limpeza periódica: remove entradas com mais de 120 segundos.
+            # Sem isso o dicionário cresce indefinidamente — cada URL, IP e
+            # domínio únicos visto na sessão fica armazenado para sempre.
+            if len(self.ultimos_eventos) > 2000:
+                corte = agora - 120
+                chaves_antigas = [
+                    k for k, ts in self.ultimos_eventos.items() if ts < corte
+                ]
+                for k in chaves_antigas:
+                    del self.ultimos_eventos[k]
+
             self.ultimos_eventos[chave] = agora
             return True
 
@@ -1340,7 +1352,10 @@ class JanelaPrincipal(QMainWindow):
             self._limpar_pos_falha()
             return
 
-        self.timer_consumir.start(250)
+        # 400ms é suficiente — a thread de análise já processa em paralelo.
+        # Em 250ms com volume alto de pacotes, _consumir_fila era chamado
+        # antes dos resultados estarem prontos, gerando ciclos vazios frequentes.
+        self.timer_consumir.start(400)
         self.timer_ui.start(1000)
         self.timer_descoberta.start(self._periodo_timer_ms)
 
