@@ -12,7 +12,7 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout,
-    QLabel, QPushButton, QComboBox, QCheckBox,
+    QLabel, QPushButton, QComboBox,
     QMessageBox, QToolBar, QTabWidget,
     QDialog, QHBoxLayout, QTextEdit,
     QDialogButtonBox, QFrame
@@ -718,7 +718,6 @@ class JanelaPrincipal(QMainWindow):
         self._limite_hosts:       int   = _DescobrirDispositivosThread.MAX_HOSTS
         self._eh_wifi:            bool  = False
         self._periodo_timer_ms:   int   = 30000
-        self._mostrar_subredes:   bool  = False
 
         self.timer_consumir = QTimer()
         self.timer_consumir.timeout.connect(self._consumir_fila)
@@ -823,12 +822,6 @@ class JanelaPrincipal(QMainWindow):
         btn_diag.clicked.connect(self._exibir_diagnostico_captura)
         barra.addWidget(btn_diag)
 
-        barra.addSeparator()
-        self.checkbox_subredes = QCheckBox("Mostrar sub-redes")
-        self.checkbox_subredes.setChecked(self._mostrar_subredes)
-        self.checkbox_subredes.toggled.connect(self._ao_alterar_visibilidade_subredes)
-        barra.addWidget(self.checkbox_subredes)
-
     def _criar_area_central(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -845,8 +838,6 @@ class JanelaPrincipal(QMainWindow):
         self.painel_trafego   = PainelTrafego()
         self.painel_eventos   = PainelEventos()
         self.painel_servidor  = PainelServidor()
-        self.painel_topologia.definir_mostrar_subredes(self._mostrar_subredes)
-
         self.abas.addTab(self.painel_topologia, "Topologia da Rede")
         self.abas.addTab(self.painel_trafego,   "Tráfego em Tempo Real")
         self.abas.addTab(self.painel_eventos,   " Modo Análise")
@@ -860,13 +851,6 @@ class JanelaPrincipal(QMainWindow):
         barra.addWidget(self.lbl_status)
         barra.addPermanentWidget(self.lbl_pacotes)
         barra.addPermanentWidget(self.lbl_dados)
-
-    @pyqtSlot(bool)
-    def _ao_alterar_visibilidade_subredes(self, mostrar: bool):
-        """Mostra ou oculta as sub-redes sem perder o estado da sessao."""
-        self._mostrar_subredes = bool(mostrar)
-        if hasattr(self, "painel_topologia"):
-            self.painel_topologia.definir_mostrar_subredes(self._mostrar_subredes)
 
     # -------------------------------------------------------------------------
     # Lazy loading ao trocar de aba

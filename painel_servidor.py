@@ -314,168 +314,517 @@ def _detectar_xss(valor: str) -> bool:
 # ===========================================================================
 
 _CSS_PAGINAS = """
+    :root {
+        color-scheme: dark;
+        --bg: #07111c;
+        --bg-alt: #0c1b2b;
+        --panel: rgba(10, 20, 33, 0.88);
+        --panel-strong: rgba(15, 31, 48, 0.96);
+        --line: rgba(112, 178, 255, 0.16);
+        --line-strong: rgba(112, 178, 255, 0.32);
+        --text: #edf4ff;
+        --muted: #9cb5d1;
+        --accent: #5ec6ff;
+        --accent-strong: #1492df;
+        --accent-soft: rgba(94, 198, 255, 0.14);
+        --success: #42d392;
+        --danger: #ff8d8d;
+        --warning: #ffd36a;
+        --shadow: 0 24px 60px rgba(0, 0, 0, 0.34);
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-        font-family: 'Segoe UI', Roboto, sans-serif;
-        background: #0a0f1e;
-        color: #e0e4f0;
+        font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+        background:
+            radial-gradient(circle at top left, rgba(94, 198, 255, 0.15), transparent 32%),
+            radial-gradient(circle at top right, rgba(66, 211, 146, 0.10), transparent 28%),
+            linear-gradient(180deg, #06101a 0%, #091522 45%, #050d15 100%);
+        color: var(--text);
         min-height: 100vh;
-        padding: 20px;
+        padding: 24px;
     }
-    nav {
-        background: #12162a;
-        border: 1px solid #1e2d40;
-        border-radius: 8px;
-        padding: 12px 20px;
-        margin-bottom: 24px;
+    body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background:
+            linear-gradient(120deg, rgba(94, 198, 255, 0.04), transparent 44%),
+            linear-gradient(300deg, rgba(66, 211, 146, 0.03), transparent 38%);
+    }
+    .page-shell {
+        position: relative;
+        z-index: 1;
+        width: min(1120px, 100%);
+        margin: 0 auto;
+    }
+    .topbar {
         display: flex;
-        gap: 10px;
         flex-wrap: wrap;
         align-items: center;
+        gap: 16px;
+        justify-content: space-between;
+        padding: 18px 22px;
+        margin-bottom: 24px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: rgba(8, 18, 29, 0.84);
+        backdrop-filter: blur(18px);
+        box-shadow: var(--shadow);
     }
-    .titulo-nav {
-        color: #ecf0f1;
-        font-weight: bold;
-        font-size: 15px;
-        margin-right: 8px;
+    .brand-block {
+        display: flex;
+        align-items: center;
+        gap: 14px;
     }
-    nav a {
-        color: #3498DB;
+    .brand-mark {
+        width: 48px;
+        height: 48px;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        color: #f7fbff;
+        background: linear-gradient(135deg, #1fb0ec 0%, #0d5f94 100%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+    }
+    .brand-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+    }
+    .brand-kicker {
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+    }
+    .brand-copy strong {
+        font-size: 18px;
+        font-weight: 600;
+        color: var(--text);
+    }
+    .nav-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+    }
+    .nav-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--muted);
         text-decoration: none;
         font-size: 13px;
-        padding: 4px 10px;
-        border-radius: 4px;
-        transition: background 0.2s;
+        transition: 0.2s ease;
     }
-    nav a:hover { background: #1e3a5f; }
-    .card {
-        background: #12162a;
-        border: 1px solid #1e2d40;
-        border-radius: 10px;
-        padding: 22px;
-        margin-bottom: 18px;
+    .nav-link:hover {
+        color: var(--text);
+        border-color: var(--line-strong);
+        background: rgba(255, 255, 255, 0.08);
+        text-decoration: none;
     }
-    h1 { color: #3498DB; font-size: 20px; margin-bottom: 14px; }
-    h2 { color: #bdc3c7; font-size: 16px; margin-bottom: 10px; }
-    h3 { color: #7f8c8d; font-size: 13px; margin-bottom: 8px; }
-    .aviso {
-        background: #1a0000;
-        border-left: 4px solid #E74C3C;
+    .nav-link.active {
+        color: var(--text);
+        border-color: rgba(94, 198, 255, 0.42);
+        background: linear-gradient(180deg, rgba(94, 198, 255, 0.22), rgba(20, 146, 223, 0.10));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    }
+    .nav-session {
+        margin-left: auto;
         padding: 10px 14px;
-        border-radius: 4px;
-        color: #ff8a8a;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
         font-size: 13px;
+    }
+    .nav-session strong { color: var(--text); }
+    .nav-session a { color: var(--accent); }
+    .page-content {
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
+    }
+    .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.9fr);
+        gap: 20px;
+        padding: 30px;
+        border-radius: 26px;
+        border: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(16, 34, 53, 0.92), rgba(8, 18, 29, 0.92));
+        box-shadow: var(--shadow);
+    }
+    .hero-panel,
+    .card {
+        border-radius: 22px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+    }
+    .hero-panel {
+        padding: 22px;
+    }
+    .card {
+        padding: 24px;
+    }
+    .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+        color: var(--accent);
+        font-size: 11px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+    }
+    .eyebrow::before {
+        content: "";
+        width: 26px;
+        height: 1px;
+        background: currentColor;
+        opacity: 0.85;
+    }
+    h1 {
+        color: var(--text);
+        font-size: clamp(30px, 4vw, 44px);
+        line-height: 1.06;
         margin-bottom: 14px;
+    }
+    h2 {
+        color: var(--text);
+        font-size: 22px;
+        margin-bottom: 12px;
+    }
+    h3 {
+        color: var(--muted);
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 10px;
+    }
+    p, li {
+        color: var(--muted);
+        line-height: 1.65;
+    }
+    .lead {
+        max-width: 60ch;
+        font-size: 16px;
+    }
+    .compact-lead {
+        font-size: 15px;
+    }
+    .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 22px;
+    }
+    .primary-link,
+    .ghost-link,
+    button,
+    input[type=submit] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 11px 18px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        text-decoration: none;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: 0.2s ease;
+    }
+    .primary-link,
+    input[type=submit] {
+        color: #07111c;
+        background: linear-gradient(135deg, #76d6ff 0%, #3eb7ff 100%);
+        border-color: rgba(255, 255, 255, 0.08);
+    }
+    .ghost-link,
+    button {
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.05);
+        border-color: var(--line);
+    }
+    .primary-link:hover,
+    input[type=submit]:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 12px 28px rgba(62, 183, 255, 0.26);
+        text-decoration: none;
+    }
+    .ghost-link:hover,
+    button:hover {
+        background: rgba(255, 255, 255, 0.09);
+        border-color: var(--line-strong);
+        text-decoration: none;
+    }
+    .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 20px;
+    }
+    .auth-grid {
+        display: grid;
+        grid-template-columns: minmax(260px, 0.95fr) minmax(0, 1.05fr);
+        gap: 20px;
+    }
+    .comment-layout {
+        display: grid;
+        grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.15fr);
+        gap: 20px;
+    }
+    .feature-list,
+    .meta-list {
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .feature-list li,
+    .meta-list li {
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        background: rgba(255, 255, 255, 0.03);
+    }
+    .stat-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 18px;
+    }
+    .stat {
+        padding: 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        background: rgba(255, 255, 255, 0.04);
+    }
+    .stat strong {
+        display: block;
+        color: var(--text);
+        font-size: 20px;
+        margin-bottom: 6px;
+    }
+    .stat span {
+        color: var(--muted);
+        font-size: 12px;
+    }
+    .aviso,
+    .info,
+    .sucesso {
+        padding: 12px 14px;
+        border-radius: 16px;
+        margin-bottom: 16px;
+        border: 1px solid transparent;
+        font-size: 13px;
+    }
+    .aviso {
+        background: rgba(255, 141, 141, 0.10);
+        border-color: rgba(255, 141, 141, 0.24);
+        color: #ffb1b1;
     }
     .info {
-        background: #001520;
-        border-left: 4px solid #3498DB;
-        padding: 10px 14px;
-        border-radius: 4px;
-        color: #7fbfdf;
-        font-size: 13px;
-        margin-bottom: 14px;
+        background: rgba(94, 198, 255, 0.11);
+        border-color: rgba(94, 198, 255, 0.22);
+        color: #a7ddff;
     }
     .sucesso {
-        background: #001a00;
-        border-left: 4px solid #2ECC71;
-        padding: 10px 14px;
-        border-radius: 4px;
-        color: #7fdf9f;
-        font-size: 13px;
-        margin-bottom: 14px;
+        background: rgba(66, 211, 146, 0.10);
+        border-color: rgba(66, 211, 146, 0.24);
+        color: #9ff0c6;
     }
     form {
         display: flex;
         flex-direction: column;
-        gap: 10px;
-        max-width: 400px;
-    }
-    label { color: #7f8c8d; font-size: 12px; }
-    input[type=text], input[type=password], input[type=email], textarea {
-        background: #0d1a2a;
-        border: 1px solid #2a4a70;
-        border-radius: 6px;
-        color: #ecf0f1;
-        padding: 9px 13px;
-        font-size: 13px;
-        font-family: inherit;
+        gap: 12px;
         width: 100%;
     }
-    textarea { resize: vertical; min-height: 80px; }
-    button, input[type=submit] {
-        background: #1e3a5f;
-        color: #ecf0f1;
-        border: 1px solid #3498DB;
-        border-radius: 6px;
-        padding: 9px 20px;
-        font-size: 13px;
-        cursor: pointer;
-        transition: background 0.2s;
+    label {
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
     }
-    button:hover, input[type=submit]:hover { background: #2a5080; }
+    input[type=text], input[type=password], input[type=email], textarea {
+        width: 100%;
+        padding: 13px 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(130, 185, 255, 0.18);
+        background: rgba(4, 10, 16, 0.42);
+        color: var(--text);
+        font-size: 14px;
+        font-family: inherit;
+        outline: none;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    }
+    input[type=text]:focus, input[type=password]:focus, input[type=email]:focus, textarea:focus {
+        border-color: rgba(94, 198, 255, 0.48);
+        box-shadow: 0 0 0 4px rgba(94, 198, 255, 0.10);
+        background: rgba(4, 10, 16, 0.56);
+    }
+    textarea {
+        min-height: 180px;
+        resize: vertical;
+    }
+    .helper-line {
+        margin-top: 14px;
+        font-size: 13px;
+        color: var(--muted);
+    }
+    .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 16px;
+    }
+    .pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 7px 11px;
+        border-radius: 999px;
+        border: 1px solid rgba(94, 198, 255, 0.22);
+        background: rgba(94, 198, 255, 0.10);
+        color: var(--accent);
+        font-size: 12px;
+        white-space: nowrap;
+    }
+    .comment-feed {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        max-height: 620px;
+        overflow-y: auto;
+        padding-right: 4px;
+    }
+    .comentario-item {
+        padding: 16px;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        background: rgba(255, 255, 255, 0.03);
+    }
+    .comentario-autor {
+        color: var(--muted);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+    }
+    .empty-state {
+        padding: 18px;
+        border-radius: 18px;
+        border: 1px dashed rgba(156, 181, 209, 0.24);
+        background: rgba(255, 255, 255, 0.02);
+        color: var(--muted);
+        text-align: center;
+    }
     table {
         width: 100%;
         border-collapse: collapse;
         font-size: 13px;
+        overflow: hidden;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
     }
     th {
-        background: #1e2d40;
-        color: #7f8c8d;
-        padding: 8px 12px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--muted);
+        padding: 10px 12px;
         text-align: left;
-        border-bottom: 1px solid #2a3a50;
     }
     td {
-        padding: 8px 12px;
-        border-bottom: 1px solid #1a2a3a;
-        color: #ecf0f1;
+        padding: 10px 12px;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        color: var(--text);
     }
-    tr:hover { background: #0f1a2a; }
+    tr:hover td {
+        background: rgba(255, 255, 255, 0.03);
+    }
+    code, pre {
+        border-radius: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        background: rgba(0, 0, 0, 0.28);
+    }
     code {
-        background: #0a0f1a;
-        border: 1px solid #1e2d40;
-        border-radius: 4px;
-        padding: 2px 6px;
+        padding: 3px 7px;
+        color: var(--accent);
         font-family: Consolas, monospace;
         font-size: 12px;
-        color: #3498DB;
     }
     pre {
-        background: #0a0f1a;
-        border: 1px solid #1e2d40;
-        border-radius: 6px;
-        padding: 12px;
+        padding: 14px;
+        color: #b7ffcf;
         font-family: Consolas, monospace;
         font-size: 12px;
-        color: #2ECC71;
         overflow-x: auto;
         white-space: pre-wrap;
-        word-break: break-all;
+        word-break: break-word;
     }
     .badge {
-        display: inline-block;
-        border-radius: 4px;
-        padding: 2px 8px;
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 5px 9px;
         font-size: 11px;
-        font-weight: bold;
+        font-weight: 700;
+        border: 1px solid transparent;
     }
-    .badge-sqli  { background: #2a1500; color: #E67E22; border: 1px solid #E67E22; }
-    .badge-xss   { background: #002a1a; color: #27AE60; border: 1px solid #27AE60; }
-    .badge-idor  { background: #1a002a; color: #9B59B6; border: 1px solid #9B59B6; }
-    .badge-csrf  { background: #2a2a00; color: #F1C40F; border: 1px solid #F1C40F; }
-    .badge-brute { background: #1a1a2a; color: #95a5a6; border: 1px solid #95a5a6; }
-    .badge-info  { background: #001520; color: #3498DB; border: 1px solid #3498DB; }
-    a { color: #3498DB; text-decoration: none; }
+    .badge-sqli  { background: rgba(230, 126, 34, 0.10); color: #ffb16c; border-color: rgba(230, 126, 34, 0.30); }
+    .badge-xss   { background: rgba(39, 174, 96, 0.10); color: #8aefb2; border-color: rgba(39, 174, 96, 0.30); }
+    .badge-idor  { background: rgba(155, 89, 182, 0.10); color: #d0a8ef; border-color: rgba(155, 89, 182, 0.30); }
+    .badge-csrf  { background: rgba(241, 196, 15, 0.10); color: #ffe48f; border-color: rgba(241, 196, 15, 0.30); }
+    .badge-brute { background: rgba(149, 165, 166, 0.10); color: #d5dcdd; border-color: rgba(149, 165, 166, 0.30); }
+    .badge-info  { background: rgba(52, 152, 219, 0.10); color: #9bdcff; border-color: rgba(52, 152, 219, 0.30); }
+    a {
+        color: var(--accent);
+        text-decoration: none;
+    }
     a:hover { text-decoration: underline; }
-    .comentario-item {
-        border-bottom: 1px solid #1e2d40;
-        padding: 10px 0;
+    @media (max-width: 920px) {
+        body { padding: 16px; }
+        .hero,
+        .grid,
+        .auth-grid,
+        .comment-layout {
+            grid-template-columns: 1fr;
+        }
+        .nav-session {
+            width: 100%;
+            margin-left: 0;
+        }
     }
-    .comentario-autor {
-        color: #7f8c8d;
-        font-size: 11px;
-        margin-bottom: 4px;
+    @media (max-width: 640px) {
+        .topbar,
+        .hero,
+        .card,
+        .hero-panel {
+            padding: 18px;
+        }
+        .nav-strip {
+            width: 100%;
+        }
+        .nav-link {
+            flex: 1 1 calc(50% - 10px);
+        }
+        .actions {
+            flex-direction: column;
+        }
+        .stat-grid {
+            grid-template-columns: 1fr;
+        }
+        h1 {
+            font-size: 30px;
+        }
     }
 """
 
@@ -500,9 +849,27 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
       - Divulgacao de erro SQL (queries e erros do banco expostos ao usuario)
     """
 
-    @staticmethod
-    def _pagina_base(titulo: str, conteudo: str) -> str:
+    def _pagina_base(self, titulo: str, conteudo: str) -> str:
         """Gera a estrutura HTML base com navegacao e estilos compartilhados."""
+        caminho_atual = self.path.split("?", 1)[0]
+        usuario = self._usuario_logado()
+        links = (
+            ("/", "In&iacute;cio"),
+            ("/login", "Login"),
+            ("/register", "Registrar"),
+            ("/comentarios", "Coment&aacute;rios"),
+        )
+        nav_links = "".join(
+            f'<a class="nav-link{" active" if caminho_atual == href else ""}" '
+            f'href="{href}">{rotulo}</a>'
+            for href, rotulo in links
+        )
+        sessao_html = (
+            f'<div class="nav-session">Sess&atilde;o ativa: <strong>{usuario}</strong> '
+            f'<a href="/logout">Sair</a></div>'
+            if usuario else
+            '<div class="nav-session">Servidor local pronto para uso</div>'
+        )
         return f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -512,20 +879,38 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
     <style>{_CSS_PAGINAS}</style>
 </head>
 <body>
-    <nav>
-        <span class="titulo-nav">NetLab</span>
-        <a href="/">Início</a>
-        <a href="/login">Login</a>
-        <a href="/register">Registrar</a>
-        <a href="/produtos">Produtos</a>
-        <a href="/busca">Busca</a>
-        <a href="/comentarios">Comentários</a>
-        <a href="/pedidos">Meus Pedidos</a>
-        <a href="/perfil">Perfil</a>
-    </nav>
-    {conteudo}
+    <div class="page-shell">
+        <header class="topbar">
+            <div class="brand-block">
+                <div class="brand-mark">NL</div>
+                <div class="brand-copy">
+                    <span class="brand-kicker">NetLab Educacional</span>
+                    <strong>Servidor Web Local</strong>
+                </div>
+            </div>
+            <nav class="nav-strip">
+                {nav_links}
+            </nav>
+            {sessao_html}
+        </header>
+        <main class="page-content">
+            {conteudo}
+        </main>
+    </div>
 </body>
 </html>"""
+
+    def _usuario_logado(self) -> str:
+        """Retorna o usuario da sessao atual se ele ainda existir no banco."""
+        usuario = _usuario_da_sessao(self.headers.get("Cookie", ""))
+        if not usuario:
+            return ""
+
+        linhas, _, _ = banco_servidor.consultar_seguro(
+            "SELECT username FROM users WHERE username = ?",
+            (usuario,),
+        )
+        return linhas[0][0] if linhas else ""
 
     # -----------------------------------------------------------------------
     # Roteamento de requisicoes GET
@@ -536,7 +921,7 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
         ts_inicio  = time.time()
         ip_cliente = self.client_address[0]
         cookies    = self.headers.get("Cookie", "")
-        usuario    = _usuario_da_sessao(cookies)
+        usuario    = self._usuario_logado()
 
         partes  = self.path.split("?", 1)
         caminho = partes[0]
@@ -554,10 +939,6 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
         elif caminho == "/register":
             corpo = self._rota_registro()
             self._enviar_html(200, corpo)
-        
-        elif caminho == "/register":
-            corpo = self._processar_registro(params, ip_cliente)
-            self._enviar_html(200, corpo)
 
         elif caminho == "/logout":
             _remover_sessao(cookies)
@@ -574,7 +955,7 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
             self._enviar_html(200, corpo)
 
         elif caminho == "/comentarios":
-            corpo = self._rota_comentarios()
+            corpo = self._rota_comentarios(usuario=usuario)
             self._enviar_html(200, corpo)
 
         elif caminho == "/pedidos":
@@ -650,6 +1031,10 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
             else:
                 self._enviar_html(200, corpo)
 
+        elif caminho == "/register":
+            corpo = self._processar_registro(params, ip_cliente)
+            self._enviar_html(200, corpo)
+
         elif caminho == "/comentarios":
             corpo = self._processar_comentario(params, ip_cliente)
             self._enviar_html(200, corpo)
@@ -669,24 +1054,49 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
     # -----------------------------------------------------------------------
 
     def _rota_inicial(self, usuario: str) -> str:
-        bloco_sessao = ""
-        if usuario:
-            bloco_sessao = (
-                f'<div class="sucesso">Bem-vindo, <strong>{usuario}</strong>! '
-                f'<a href="/logout">[Sair]</a></div>'
-            )
+        bloco_sessao = (
+            f'<div class="sucesso">Sess&atilde;o iniciada como <strong>{usuario}</strong>. '
+            f'<a href="/logout">Encerrar sess&atilde;o</a></div>'
+            if usuario else
+            '<div class="info">Escolha um fluxo no menu para navegar pelo servidor local.</div>'
+        )
 
         conteudo = f"""
-        <div class="card">
-            <h1>NetLab - Servidor de Demonstração</h1>
-            {bloco_sessao}
-            <div class="info">
-                Este é um ambiente de estudo sobre aplicações web.
-                Utilize o menu acima para navegar.
+        <section class="hero">
+            <div>
+                <span class="eyebrow">NetLab Educacional</span>
+                <h1>Servidor web local pronto para uso.</h1>
+                <p class="lead">
+                    Entre com uma conta, registre novos usu&aacute;rios e acompanhe o
+                    mural de coment&aacute;rios com um fluxo mais coerente.
+                </p>
+                <div class="actions">
+                    <a class="primary-link" href="/login">Abrir login</a>
+                    <a class="ghost-link" href="/register">Criar conta</a>
+                    <a class="ghost-link" href="/comentarios">Ver coment&aacute;rios</a>
+                </div>
             </div>
-        </div>
+            <aside class="hero-panel">
+                <h3>Estado atual</h3>
+                {bloco_sessao}
+                <div class="stat-grid">
+                    <div class="stat">
+                        <strong>4</strong>
+                        <span>rotas em destaque</span>
+                    </div>
+                    <div class="stat">
+                        <strong>HTTP</strong>
+                        <span>acesso local direto</span>
+                    </div>
+                    <div class="stat">
+                        <strong>RAM</strong>
+                        <span>dados reiniciam ao parar</span>
+                    </div>
+                </div>
+            </aside>
+        </section>
         """
-        return self._pagina_base("Início", conteudo)
+        return self._pagina_base("Inicio", conteudo)
 
     def _rota_formulario_login(self, mensagem: str = "", tipo_msg: str = "") -> str:
         bloco_msg = ""
@@ -695,20 +1105,48 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
             bloco_msg = f'<div class="{classe}">{mensagem}</div>'
 
         conteudo = f"""
-        <div class="card" style="max-width: 500px;">
-            <h1>Login</h1>
-            {bloco_msg}
-            <form method="POST" action="/login">
-                <label>Usuário</label>
-                <input type="text" name="usuario" autocomplete="off">
-                <label>Senha</label>
-                <input type="password" name="senha">
-                <input type="submit" value="Entrar">
-            </form>
-            <p style="margin-top:12px;font-size:11px;">
-                Não tem conta? <a href="/register">Registrar</a>
-            </p>
-        </div>
+        <section class="auth-grid">
+            <div class="card">
+                <span class="eyebrow">Acesso local</span>
+                <h1>Login</h1>
+                <p class="lead compact-lead">
+                    Entre para iniciar uma sess&atilde;o e voltar rapidamente ao
+                    painel principal do servidor.
+                </p>
+                <div class="stat-grid">
+                    <div class="stat">
+                        <strong>1</strong>
+                        <span>formul&aacute;rio direto</span>
+                    </div>
+                    <div class="stat">
+                        <strong>Local</strong>
+                        <span>sem etapas extras</span>
+                    </div>
+                    <div class="stat">
+                        <strong>Web</strong>
+                        <span>fluxo integrado ao NetLab</span>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <span class="eyebrow">Entrar</span>
+                <h2>Use sua conta</h2>
+                <p class="helper-line" style="margin-top:0; margin-bottom:16px;">
+                    Informe usu&aacute;rio e senha para abrir a sess&atilde;o.
+                </p>
+                {bloco_msg}
+                <form method="POST" action="/login">
+                    <label>Usu&aacute;rio</label>
+                    <input type="text" name="usuario" autocomplete="off" placeholder="Digite seu usu&aacute;rio">
+                    <label>Senha</label>
+                    <input type="password" name="senha" placeholder="Digite sua senha">
+                    <input type="submit" value="Entrar">
+                </form>
+                <p class="helper-line">
+                    N&atilde;o tem conta? <a href="/register">Registrar agora</a>
+                </p>
+            </div>
+        </section>
         """
         return self._pagina_base("Login", conteudo)
 
@@ -746,18 +1184,7 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
         if linhas:
             _, nome_usuario, _ = linhas[0]
             token = _criar_sessao(nome_usuario)
-
-            conteudo = f"""
-            <div class="card">
-                <h1>Login realizado</h1>
-                <div class="sucesso">
-                    Bem-vindo, <strong>{nome_usuario}</strong>!
-                </div>
-                <br>
-                <a href="/">Ir para o início</a>
-            </div>
-            """
-            return self._pagina_base("Login", conteudo), f"sessao={token}; Path=/"
+            return self._rota_inicial(nome_usuario), f"sessao={token}; Path=/"
 
         return self._rota_formulario_login("Usuário ou senha incorretos.", "erro"), None
 
@@ -976,48 +1403,125 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
         """
         return self._pagina_base("Busca", conteudo)
 
-    def _rota_comentarios(self) -> str:
+    def _rota_comentarios(self, usuario: str = "", mensagem: str = "", tipo_msg: str = "") -> str:
         linhas, _, _ = banco_servidor.consultar_seguro(
             "SELECT id, author, content, created_at FROM comments ORDER BY id DESC"
         )
+
+        bloco_msg = ""
+        if mensagem:
+            classe = "aviso" if tipo_msg == "erro" else "sucesso"
+            bloco_msg = f'<div class="{classe}">{mensagem}</div>'
 
         comentarios_html = ""
         for linha in linhas:
             _, autor, conteudo_comentario, criado_em = linha
             comentarios_html += f"""
             <div class="comentario-item">
-                <div class="comentario-autor">{autor or "anônimo"} — {criado_em or ""}</div>
+                <div class="comentario-autor">{autor or "an&ocirc;nimo"} - {criado_em or ""}</div>
                 <div>{conteudo_comentario}</div>
             </div>
             """
 
         if not comentarios_html:
-            comentarios_html = "<p style='color:#7f8c8d;'>Nenhum comentário ainda.</p>"
+            comentarios_html = (
+                '<div class="empty-state">Nenhum coment&aacute;rio publicado at&eacute; agora.</div>'
+            )
+
+        formulario_html = ""
+        if usuario:
+            formulario_html = f"""
+                <div class="section-head">
+                    <h2>Publicar mensagem</h2>
+                    <span class="pill">Conectado como {usuario}</span>
+                </div>
+                <div class="info">Seu coment&aacute;rio ser&aacute; publicado com o nome do perfil logado.</div>
+                {bloco_msg}
+                <form method="POST" action="/comentarios">
+                    <label>Perfil ativo</label>
+                    <input type="text" value="{usuario}" disabled>
+                    <label>Coment&aacute;rio</label>
+                    <textarea name="conteudo" placeholder="Escreva sua mensagem aqui..."></textarea>
+                    <input type="submit" value="Publicar">
+                </form>
+            """
+        else:
+            aviso_login = bloco_msg or (
+                '<div class="info">Fa&ccedil;a login para publicar coment&aacute;rios com o nome da sua conta.</div>'
+            )
+            formulario_html = f"""
+                <div class="section-head">
+                    <h2>Publicar mensagem</h2>
+                    <span class="pill">Login obrigat&oacute;rio</span>
+                </div>
+                {aviso_login}
+                <div class="actions">
+                    <a class="primary-link" href="/login">Entrar</a>
+                    <a class="ghost-link" href="/register">Criar conta</a>
+                </div>
+            """
 
         conteudo = f"""
-        <div class="card">
-            <h1>Comentários</h1>
-            <form method="POST" action="/comentarios">
-                <label>Nome (opcional)</label>
-                <input type="text" name="autor" placeholder="Anônimo">
-                <label>Comentário</label>
-                <textarea name="conteudo" placeholder="Digite aqui..."></textarea>
-                <button type="submit">Publicar</button>
-            </form>
-        </div>
-        <div class="card">
-            <h2>Comentários publicados</h2>
-            {comentarios_html}
-        </div>
+        <section class="hero">
+            <div>
+                <span class="eyebrow">Mural local</span>
+                <h1>Coment&aacute;rios</h1>
+                <p class="lead">
+                    Um mural simples para publicar mensagens e acompanhar tudo o
+                    que j&aacute; foi enviado nesta sess&atilde;o do servidor.
+                </p>
+            </div>
+            <aside class="hero-panel">
+                <h3>Resumo do mural</h3>
+                <div class="stat-grid">
+                    <div class="stat">
+                        <strong>{len(linhas)}</strong>
+                        <span>mensagens vis&iacute;veis</span>
+                    </div>
+                    <div class="stat">
+                        <strong>POST</strong>
+                        <span>envio imediato</span>
+                    </div>
+                    <div class="stat">
+                        <strong>Live</strong>
+                        <span>feed atualizado na hora</span>
+                    </div>
+                </div>
+            </aside>
+        </section>
+        <section class="comment-layout">
+            <div class="card">
+                {formulario_html}
+            </div>
+            <div class="card">
+                <div class="section-head">
+                    <h2>Mural</h2>
+                    <span class="pill">{len(linhas)} registro(s)</span>
+                </div>
+                <div class="comment-feed">
+                    {comentarios_html}
+                </div>
+            </div>
+        </section>
         """
-        return self._pagina_base("Comentários", conteudo)
+        return self._pagina_base("Comentarios", conteudo)
 
     def _processar_comentario(self, params: dict, ip_cliente: str) -> str:
-        autor    = params.get("autor",    ["anônimo"])[0][:100]
+        autor    = self._usuario_logado()[:100]
         conteudo = params.get("conteudo", [""])[0]
 
+        if not autor:
+            return self._rota_comentarios(
+                mensagem="Fa&ccedil;a login para publicar coment&aacute;rios.",
+                tipo_msg="erro",
+            )
+
         if not conteudo.strip():
-            return self._rota_comentarios()
+            return self._rota_comentarios(
+                usuario=autor,
+                mensagem="Digite um coment&aacute;rio antes de publicar.",
+                tipo_msg="erro",
+            )
 
         if _detectar_xss(conteudo) or _detectar_xss(autor):
             sinais_servidor.alerta_emitido.emit(
@@ -1050,7 +1554,11 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
             """
             return self._pagina_base("Erro", conteudo_html)
 
-        return self._rota_comentarios()
+        return self._rota_comentarios(
+            usuario=autor,
+            mensagem="Coment&aacute;rio publicado com sucesso.",
+            tipo_msg="sucesso",
+        )
     def _rota_pedidos(self, params: dict) -> str:
         try:
             pedido_id = int(params.get("id", ["1"])[0].strip())
@@ -1223,22 +1731,41 @@ class HandlerVulneravel(BaseHTTPRequestHandler):
     def _rota_registro(self, erro: str = "") -> str:
         bloco_erro = f'<div class="aviso">{erro}</div>' if erro else ""
         conteudo = f"""
-        <div class="card" style="max-width: 500px;">
-            <h1>Criar conta</h1>
-            {bloco_erro}
-            <form method="POST" action="/register">
-                <label>Usuário</label>
-                <input type="text" name="usuario" required autocomplete="off">
-                <label>Senha (apenas números)</label>
-                <input type="password" name="senha" required>
-                <label>Confirmar senha</label>
-                <input type="password" name="confirmar" required>
-                <input type="submit" value="Registrar">
-            </form>
-            <p style="margin-top:12px;font-size:11px;">
-                Já tem conta? <a href="/login">Entrar</a>
-            </p>
-        </div>
+        <section class="auth-grid">
+            <div class="card">
+                <span class="eyebrow">Novo acesso</span>
+                <h1>Registrar</h1>
+                <p class="lead compact-lead">
+                    Crie uma conta no banco em mem&oacute;ria para testar o fluxo de
+                    cadastro e seguir direto para o login.
+                </p>
+                <ul class="meta-list" style="margin-top:18px;">
+                    <li>Usu&aacute;rios ficam dispon&iacute;veis enquanto o servidor estiver ativo.</li>
+                    <li>O cadastro valida confirma&ccedil;&atilde;o de senha e unicidade de usu&aacute;rio.</li>
+                    <li>Ao concluir, o sistema j&aacute; devolve voc&ecirc; ao login com mensagem de sucesso.</li>
+                </ul>
+            </div>
+            <div class="card">
+                <span class="eyebrow">Cadastro</span>
+                <h2>Criar conta</h2>
+                <p class="helper-line" style="margin-top:0; margin-bottom:16px;">
+                    Preencha os campos para registrar um novo usu&aacute;rio.
+                </p>
+                {bloco_erro}
+                <form method="POST" action="/register">
+                    <label>Usu&aacute;rio</label>
+                    <input type="text" name="usuario" required autocomplete="off" placeholder="Escolha um usu&aacute;rio">
+                    <label>Senha (apenas n&uacute;meros)</label>
+                    <input type="password" name="senha" required placeholder="Use ao menos 4 d&iacute;gitos">
+                    <label>Confirmar senha</label>
+                    <input type="password" name="confirmar" required placeholder="Repita a senha">
+                    <input type="submit" value="Registrar">
+                </form>
+                <p class="helper-line">
+                    J&aacute; tem conta? <a href="/login">Entrar</a>
+                </p>
+            </div>
+        </section>
         """
         return self._pagina_base("Registrar", conteudo)
 

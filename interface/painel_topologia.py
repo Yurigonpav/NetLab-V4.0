@@ -251,7 +251,6 @@ class VisualizadorTopologia(QWidget):
 
         self._zoom       = 1.0
         self._offset     = QPointF(0, 0)
-        self._mostrar_subredes = False
         self._drag_inicio: Optional[QPoint] = None
         self._offset_drag_inicio = QPointF(0, 0)
         self._no_hover: Optional[str]      = None
@@ -697,10 +696,6 @@ class VisualizadorTopologia(QWidget):
         self._auto_zoom()
         self.update()
 
-    def definir_mostrar_subredes(self, mostrar: bool):
-        self._mostrar_subredes = bool(mostrar)
-        self.update()
-
     def definir_rede_local(self, cidr: str):
         try:
             import ipaddress
@@ -732,7 +727,7 @@ class VisualizadorTopologia(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.fillRect(self.rect(), self.COR_FUNDO)
 
-        if not self.dispositivos and (not self.subredes or not self._mostrar_subredes):
+        if not self.dispositivos:
             self._pintar_vazio(p)
             return
 
@@ -740,13 +735,9 @@ class VisualizadorTopologia(QWidget):
         p.translate(self._offset)
         p.scale(self._zoom, self._zoom)
         self._pintar_conexoes(p)
-        if self._mostrar_subredes:
-            self._pintar_subredes(p)
         self._pintar_nos(p)
         p.restore()
 
-        if self._mostrar_subredes:
-            self._pintar_subredes_sem_hosts(p)
         self._pintar_legenda(p)
         self._pintar_info(p)
         self._pintar_tooltip(p)
@@ -1372,9 +1363,6 @@ class PainelTopologia(QWidget):
 
     def atualizar(self):
         self.visualizador.update()
-
-    def definir_mostrar_subredes(self, mostrar: bool):
-        self.visualizador.definir_mostrar_subredes(mostrar)
 
     def definir_rede_local(self, cidr: str):
         self.visualizador.definir_rede_local(cidr)
