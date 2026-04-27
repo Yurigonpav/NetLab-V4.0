@@ -2,242 +2,287 @@
 
 <div align="center">
 
-Monitor de redes desktop com foco didático, visualização de topologia e análise pedagógica de tráfego em tempo real.
+Aplicação desktop para captura e análise de tráfego de rede com foco didático, desenvolvida como trabalho de conclusão de curso (TCC) no Curso Técnico em Informática.
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![PyQt6](https://img.shields.io/badge/PyQt6-Desktop-41CD52?style=for-the-badge&logo=qt&logoColor=white)
-![Scapy](https://img.shields.io/badge/Scapy-Captura%20de%20Pacotes-FF6B35?style=for-the-badge)
+![Scapy](https://img.shields.io/badge/Scapy-Captura-FF6B35?style=for-the-badge)
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?style=for-the-badge&logo=windows&logoColor=white)
 
 </div>
 
-## Sobre o projeto
+---
 
-O **NetLab Educacional** é uma aplicação desktop desenvolvida para apoiar o ensino de redes de computadores com tráfego real, visualizações gráficas e explicações automáticas voltadas para contexto didático.
+## O que é o NetLab Educacional
 
-Hoje o projeto combina quatro frentes principais:
+O NetLab Educacional é uma aplicação desktop para Windows que captura pacotes de rede em tempo real e os apresenta de forma visual e explicada, com linguagem acessível a estudantes de redes de computadores e segurança da informação.
 
-- captura de pacotes em tempo real com Scapy/Npcap;
-- visualização da topologia da rede local;
-- painel de tráfego com histórico e estatísticas;
-- modo de análise com explicações pedagógicas e insights de uso da rede.
+O projeto combina quatro frentes principais:
 
-O sistema também inclui uma aba com **servidor HTTP propositalmente vulnerável** para demonstrações controladas de SQL Injection, XSS, IDOR, exposição de dados e outros cenários de segurança em laboratório.
+- **Captura e classificação de pacotes** com Scapy e Npcap
+- **Visualização da topologia** da rede local em mapa interativo
+- **Painel de tráfego** com histórico, gráfico EMA e estatísticas por protocolo
+- **Modo Análise** com explicações pedagógicas estruturadas por evento
+- **Servidor HTTP didático** com vulnerabilidades reais para demonstrações em laboratório
 
 > [!WARNING]
-> O projeto é focado em **Windows** e depende de **Npcap** para captura de pacotes. Para capturar tráfego corretamente, o NetLab deve ser executado com privilégios de administrador.
+> O NetLab requer **Npcap** instalado e deve ser executado com **privilégios de administrador** para capturar pacotes.
 
-## O que o NetLab faz hoje
+---
 
-### Captura e classificação de pacotes
+## Funcionalidades verificadas no código
 
-- Captura tráfego de rede em tempo real usando `AsyncSniffer` do Scapy.
-- Classifica eventos como `DNS`, `DHCP`, `HTTP`, `HTTPS`, `TCP_SYN`, `ICMP` e `ARP`.
-- Aplica rate limit na captura para evitar sobrecarga da interface.
-- Detecta automaticamente interface ativa, IP local e CIDR da rede quando possível.
-- Usa parser HTTP em C via `ctypes` quando disponível, com fallback automático para Python.
+### Captura de pacotes — `interface/janela_principal.py`, `analisador_pacotes.py`
 
-### Modo Análise
+- Captura em tempo real via `AsyncSniffer` do Scapy em modo promíscuo
+- Classificação automática de pacotes: `DNS`, `DHCP`, `HTTP`, `HTTPS`, `TCP_SYN`, `TCP_FIN`, `TCP_RST`, `ICMP`, `ARP`
+- Rate limit de 800 pacotes por segundo para proteger a UI de sobrecarga
+- Parser HTTP em C via `ctypes` (`http_parser.dll`/`.so`) com fallback automático para Python puro
+- Fila de entrada com `deque(maxlen=20_000)` e thread dedicada de análise (`ThreadAnalisador`)
+- Detecção automática de interface ativa, IP local e CIDR da rede
 
-- Exibe eventos ao vivo com filtros por protocolo e busca textual.
-- Organiza a leitura pedagógica em três abas:
-  - **Análise**
-  - **Risco e Dados**
-  - **Evidências**
-- Estrutura o conteúdo do evento em seções como análise, leitura técnica, superfície de risco, evidência observada, interpretação operacional e ação sugerida.
-- Mantém contadores por tipo de evento na sessão.
-- Gera insights com:
-  - domínios mais acessados;
-  - classificação de uso da rede;
-  - resumo de volume e alertas da sessão.
+### Motor pedagógico — `motor_pedagogico.py`
 
-### Topologia da rede
+- Geração de explicações em linguagem acessível para cada tipo de evento capturado
+- Cobertura de protocolos: DNS, HTTP, HTTPS, TCP (SYN/FIN/RST), ICMP, ARP, DHCP, SSH, FTP, SMB, RDP
+- Deep Packet Inspection (DPI) em pacotes HTTP: extração de headers, corpo, campos de formulário e credenciais expostas
+- Detecção de campos sensíveis (senha, token, CPF, email, etc.) via regex com word-boundary
+- Identificação de fabricante por OUI nos primeiros 3 bytes do MAC
+- Estimativa de sistema operacional pelo valor TTL
+- Dump hexadecimal do pacote bruto (primeiros 2048 bytes)
+- Alertas de segurança internos com registro dos últimos 200 eventos HTTP suspeitos
 
-- Desenha a rede local em um mapa interativo com zoom, pan, hover e seleção de nós.
-- Agrupa IPs externos em um nó único chamado **Internet**.
-- Destaca conexões entre dispositivos observados durante a captura.
-- Marca dispositivos como **CONFIRMADO** ou **OBSERVADO** conforme a origem da descoberta.
-- Permite definir apelidos manualmente com duplo clique no dispositivo.
-- Exibe fabricante por OUI, hostname, tipo inferido, portas e volume aproximado.
-- Suporta exibição opcional de sub-redes descobertas e inferidas pela tabela de rotas.
+### Modo Análise — `interface/painel_eventos.py`
 
-### Descoberta e enriquecimento de dispositivos
+- Lista ao vivo de eventos com filtros por protocolo e busca textual
+- Estrutura pedagógica de **6 seções** por evento:
+  1. Análise — o que aconteceu e por quê
+  2. Leitura Técnica — como o protocolo funciona
+  3. Superfície de Risco — vulnerabilidades quando aplicável
+  4. Evidência Observada — campos reais do pacote
+  5. Interpretação Operacional — o que significa na prática
+  6. Ação Sugerida — o que fazer e por quê
+- Cap de 120 widgets visíveis no `QListWidget` para evitar freeze de interface
+- Buffer de até 300 eventos com `deque(maxlen=300)`
+- Aba **Insights** com domínios mais acessados e classificação de uso da rede
+- Contadores por tipo de evento na sessão atual
 
-- Executa varredura ARP inicial e descoberta periódica.
-- Complementa descoberta com ICMP em hosts elegíveis.
-- Importa entradas da tabela ARP do sistema para enriquecer a topologia.
-- Atualiza a base de fabricantes pela base `manuf` do Wireshark em segundo plano.
-- Persiste apelidos de dispositivos localmente em arquivo JSON.
+### Topologia da rede — `interface/painel_topologia.py`
 
-### Painel de tráfego
+- Mapa interativo com zoom (scroll), pan (arrastar) e seleção de nós
+- IPs externos agrupados automaticamente em nó "Internet"
+- Tamanho dos nós proporcional ao volume de pacotes observados
+- Destaque de conexões ao selecionar um dispositivo
+- Distinção entre dispositivos **CONFIRMADO** (ARP) e **OBSERVADO** (sniffer)
+- Painel de detalhes com IP, MAC, fabricante, portas, tipo e apelido personalizado
+- Apelido por duplo clique, persistido em `dados/aliases.json`
+- Limite de 50 nós locais simultâneos com remoção automática dos mais antigos e menos confiáveis
+- Exibição opcional de sub-redes descobertas e inferidas via tabela de rotas
 
-- Mantém histórico de até **2 horas** de amostras.
-- Mostra gráfico de KB/s com:
-  - curva bruta;
-  - curva suavizada por EMA;
-  - crosshair com tooltip;
-  - navegação temporal e retorno ao modo ao vivo.
-- Exibe cards com total de pacotes, volume trafegado e dispositivos ativos.
-- Lista protocolos detectados com contagem e volume de dados.
-- Mostra top dispositivos por tráfego enviado, recebido e total.
+### Painel de Tráfego — `interface/painel_trafego.py`
 
-### Servidor HTTP didático
+- Gráfico de KB/s com duas curvas sobrepostas:
+  - Curva bruta (voltilidade real)
+  - Curva EMA com fator α ajustável (suavização exponencial)
+- Histórico de até 7.200 amostras (≈ 2 horas a 1 amostra/s)
+- Navegação temporal: recuar, avançar, pausar e retornar ao vivo
+- Crosshair com tooltip de valor exato
+- Cards com total de pacotes, volume trafegado e dispositivos ativos
+- Tabelas de protocolos detectados e top dispositivos por tráfego
 
-Na aba **Servidor**, o projeto inicia um servidor HTTP local multi-thread para demonstrações de segurança em sala de aula.
+### Descoberta de dispositivos — `interface/janela_principal.py`
 
-Recursos ativos do painel:
+- Varredura ARP ativa via `srp` do Scapy (lotes configuráveis)
+- Varredura ICMP complementar com resolução de MAC prévia
+- Importação da tabela ARP do sistema operacional (`arp -a` / `ip neigh`)
+- Atualização periódica automática (intervalo ajustado conforme tipo de interface)
+- Parâmetros automáticos mais conservadores para interfaces Wi-Fi
+- Detecção de sub-redes via tabela de rotas do sistema (`route print -4` / `ip route`)
 
-- escolha de porta diretamente pela interface;
-- exibição do endereço local para acesso por outros dispositivos da rede;
-- contadores de requisições, dados trafegados, clientes e carga por segundo;
-- tabela com requisições recentes;
-- log de alertas didáticos em tempo real.
+### Identificação de fabricantes — `utils/identificador.py`
 
-Rotas e cenários de demonstração presentes no servidor:
+- Singleton `GerenciadorDispositivos` com lookup via biblioteca `manuf` (base OUI do Wireshark)
+- Cache RAM de até 10.000 entradas para lookups repetidos em O(1)
+- Atualização automática da base OUI em thread daemon se desatualizada (> 30 dias)
+- Atualização manual via menu "Atualizar Base de Fabricantes"
+- Apelidos persistidos em `dados/aliases.json` com escrita atômica
 
-- login vulnerável a SQL Injection;
-- catálogo de produtos;
-- busca vulnerável a XSS refletido;
-- comentários vulneráveis a XSS armazenado;
-- pedidos vulneráveis a IDOR;
-- listagem de usuários com exposição de credenciais;
-- perfil vulnerável a XSS refletido;
-- endpoints JSON com divulgação de dados.
+### Servidor HTTP didático — `painel_servidor.py`
 
-O banco usado pelo servidor é um **SQLite em memória**, recriado a cada inicialização e descartado ao parar o laboratório.
+- Servidor HTTP multi-thread em memória iniciado pela interface gráfica
+- Banco SQLite **totalmente em memória** (`:memory:`), recriado a cada sessão e descartado ao parar
+- Porta configurável pela interface (padrão 8080)
+- Vulnerabilidades intencionais para demonstração em laboratório:
+  - SQL Injection por concatenação direta em `/login` e `/produtos`
+  - XSS refletido em `/busca` e `/perfil`
+  - XSS armazenado em `/comentarios`
+  - IDOR em `/pedidos` (sem verificação de autorização)
+  - Exposição de credenciais em `/usuarios` e `/api/usuarios` (sem autenticação)
+  - Tokens de sessão sequenciais e previsíveis
+- Tabela de requisições em tempo real com payload resumido
+- Log de alertas didáticos categorizados (INFO / AVISO / CRÍTICO)
+- Contadores de requisições por segundo, total de dados e clientes únicos
 
-> [!CAUTION]
-> O servidor embutido é intencionalmente inseguro. Use apenas em ambiente controlado de laboratório e nunca exponha esse recurso para internet pública.
+### Módulos nativos opcionais em C — `http_parser.c`, `netlab_core_lib.c`
 
-## Arquitetura resumida
+- `http_parser.dll/.so`: parser HTTP de alta performance via `ctypes`; fallback automático para Python se ausente
+- `netlab_core_lib.dll/.so`: buffer circular e métricas de taxa (bytes/s) com janela deslizante; implementação Python equivalente sempre disponível
 
-O fluxo principal do monitoramento é dividido em camadas para manter a UI responsiva:
+---
 
-1. uma thread de captura recebe pacotes da interface de rede;
-2. um analisador dedicado classifica os pacotes e atualiza estatísticas;
-3. a interface Qt consome os resultados por timers e atualiza os painéis.
+## Estrutura do projeto
 
-O projeto também possui módulos nativos opcionais para acelerar partes específicas, mas a aplicação continua funcionando com fallback em Python quando a compilação não estiver disponível.
+```text
+NetLab/
+├── main.py                        # Ponto de entrada — inicializa Qt e abre a janela
+├── analisador_pacotes.py          # Classificação de pacotes e estatísticas
+├── motor_pedagogico.py            # Geração de explicações didáticas por evento
+├── painel_servidor.py             # Servidor HTTP didático com vulnerabilidades
+├── netlab_core.py                 # Wrapper ctypes para netlab_core_lib
+├── diagnostico.py                 # Script standalone para testar interfaces
+├── http_parser.c                  # Parser HTTP em C (compilado como .dll/.so)
+├── netlab_core_lib.c              # Buffer circular e métricas em C
+├── compilar_http_parser.py        # Wrapper de compilação do http_parser
+├── setup_netlab.py                # Wrapper de compilação do netlab_core_lib
+├── requirements.txt
+│
+├── interface/
+│   ├── janela_principal.py        # Janela Qt, timers, sniffer e descoberta de rede
+│   ├── painel_eventos.py          # Modo Análise com estrutura pedagógica de 6 seções
+│   ├── painel_topologia.py        # Mapa interativo da rede local
+│   └── painel_trafego.py          # Gráfico EMA, histórico e tabelas de tráfego
+│
+├── utils/
+│   ├── compilar_c.py              # Compilação unificada dos módulos C
+│   ├── constantes.py              # Cores, classificações e portas conhecidas
+│   ├── gerenciador_subredes.py    # Descoberta e classificação de sub-redes
+│   ├── identificador.py           # Identificação de fabricantes por OUI (manuf)
+│   └── rede.py                    # Utilitários: IP local, classificação RFC 1918
+│
+├── recursos/
+│   └── estilos/
+│       └── tema_escuro.qss        # Folha de estilos Qt (tema escuro)
+│
+└── dados/
+    └── aliases.json               # Apelidos de dispositivos (criado em tempo de execução)
+```
 
-## Tecnologias usadas
+---
 
-- `Python`
-- `PyQt6`
-- `Scapy`
-- `PyQtGraph`
-- `manuf`
-- `Npcap` no Windows
-- `SQLite` em memória no servidor didático
+## Pré-requisitos
 
-## Requisitos
+| Requisito | Versão | Observação |
+|---|---|---|
+| Windows | 10 ou 11 | Único SO suportado atualmente |
+| Python | 3.11+ | Testado com 3.11 e 3.12 |
+| Npcap | Mais recente | Necessário para captura de pacotes |
+| Privilégio | Administrador | Obrigatório para sniffing |
+| GCC (opcional) | Qualquer | Só para compilar os módulos C |
 
-Antes de executar o projeto, garanta:
-
-- Windows 10 ou Windows 11;
-- Python 3.11 ou superior;
-- `Npcap` instalado;
-- permissão de administrador para a captura;
-- dependências Python instaladas via `requirements.txt`.
-
-Compilador C é opcional. Ele só é necessário se você quiser recompilar os módulos nativos manualmente.
+---
 
 ## Instalação
 
-### 1. Criar ambiente virtual
+### 1. Instalar o Npcap
+
+Baixe em [https://npcap.com](https://npcap.com) e marque a opção **"WinPcap API-compatible mode"** durante a instalação.
+
+### 2. Criar ambiente virtual e instalar dependências
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-### 2. Instalar dependências
-
-```powershell
 pip install -r requirements.txt
 ```
 
-### 3. Compilar módulos nativos (opcional)
+**Conteúdo do `requirements.txt`:**
+
+```
+PyQt6
+scapy
+pyqtgraph
+cryptography
+manuf
+```
+
+### 3. Compilar os módulos nativos em C (opcional)
+
+A compilação melhora a performance do parser HTTP, mas não é obrigatória. O sistema usa fallback em Python puro se as bibliotecas não estiverem disponíveis.
 
 ```powershell
 python utils\compilar_c.py
 ```
 
-Se a compilação não acontecer, o NetLab continua funcionando com fallback em Python.
+Requer `gcc` (MinGW/MSYS2) ou `cl` (MSVC) no PATH.
 
 ### 4. Executar a aplicação
 
 ```powershell
+# Execute sempre como administrador
 python main.py
 ```
+
+---
 
 ## Como usar
 
 ### Monitoramento de rede
 
-1. Execute o programa como administrador.
-2. Selecione uma interface de rede válida na barra superior.
-3. Clique em **Iniciar Captura**.
-4. Acompanhe a rede pelas abas:
-   - **Topologia da Rede**
-   - **Tráfego em Tempo Real**
-   - **Modo Análise**
-5. Use o botão **Diagnóstico** se precisar validar interface, CIDR ou estado da captura.
+1. Execute o NetLab **como administrador**
+2. Selecione a interface de rede no menu suspenso da barra superior
+3. Clique em **Iniciar Captura**
+4. Abra um navegador e acesse sites para gerar tráfego real
+5. Navegue pelas abas:
+   - **Topologia da Rede** — mapa visual dos dispositivos detectados
+   - **Tráfego em Tempo Real** — gráfico e estatísticas por protocolo
+   - **Modo Análise** — eventos com explicações pedagógicas
+6. Clique em qualquer evento na lista lateral para ver a análise completa nas três abas de conteúdo
+
+### Diagnóstico de interface
+
+Se a captura não estiver funcionando:
+
+```powershell
+# Execute como administrador
+python diagnostico.py
+```
+
+O script testa cada interface disponível por 4 segundos e indica quais capturam tráfego real.
 
 ### Laboratório HTTP
 
-1. Abra a aba **Servidor**.
-2. Ajuste a porta se necessário.
-3. Clique em **Iniciar Servidor**.
-4. Acesse o endereço mostrado no painel em um navegador da mesma rede.
-5. Observe requisições e alertas na própria interface do NetLab.
+1. Abra a aba **Servidor**
+2. Ajuste a porta se necessário (padrão: 8080)
+3. Clique em **Iniciar Servidor**
+4. Acesse `http://<IP-local>:8080/` de qualquer dispositivo na mesma rede
+5. Observe as requisições e alertas em tempo real no painel
 
-## Ferramentas auxiliares
+> [!CAUTION]
+> O servidor é intencionalmente inseguro. Use **apenas em ambientes controlados de laboratório**. Nunca exponha este servidor à internet ou a redes públicas.
 
-- `diagnostico.py`: testa interfaces de rede e ajuda a descobrir qual adaptador realmente está capturando tráfego.
-- `compilar_http_parser.py` e `setup_netlab.py`: wrappers de compatibilidade para compilação manual.
-- `utils/compilar_c.py`: forma recomendada para recompilar os módulos C opcionais.
+---
 
-## Estrutura do projeto
+## Limitações conhecidas
 
-```text
-NetLab-V4.0/
-├── main.py
-├── analisador_pacotes.py
-├── motor_pedagogico.py
-├── painel_servidor.py
-├── diagnostico.py
-├── interface/
-│   ├── janela_principal.py
-│   ├── painel_eventos.py
-│   ├── painel_topologia.py
-│   └── painel_trafego.py
-├── utils/
-│   ├── compilar_c.py
-│   ├── constantes.py
-│   ├── gerenciador_subredes.py
-│   ├── identificador.py
-│   └── rede.py
-├── recursos/
-│   └── estilos/
-├── dados/
-├── http_parser.c
-└── requirements.txt
-```
+- **Sistema operacional:** o projeto foi desenvolvido e testado exclusivamente no Windows. Existe código de compatibilidade com Linux, mas não foi validado em produção.
+- **Captura em Wi-Fi:** no Windows, o modo promíscuo em adaptadores sem fio frequentemente não captura tráfego de outros dispositivos da rede — apenas o tráfego do próprio computador e broadcasts.
+- **HTTPS:** a inspeção é limitada aos metadados visíveis (endereços IP, porta e SNI). O conteúdo cifrado pelo TLS não é acessível.
+- **Detecção de fabricante:** depende da biblioteca `manuf` e de acesso à internet para atualizar a base OUI. Em uso offline com base desatualizada, muitos MACs retornam "Desconhecido".
+- **Escopo do sniffer:** captura apenas tráfego IP e ARP que passa pela interface selecionada. Tráfego entre outros dispositivos da rede pode não ser visível dependendo da topologia (switch vs. hub, presença de VLAN, etc.).
+- **Sem testes automatizados:** o repositório não possui suíte de testes publicada.
 
-## Limitações e observações
-
-- A captura foi pensada para o ambiente Windows com Npcap.
-- Em redes Wi-Fi, o modo promíscuo pode não revelar todo o tráfego da rede.
-- O projeto consegue inspecionar o conteúdo de **HTTP em texto puro**, mas em **HTTPS** a visibilidade fica restrita a metadados observáveis.
-- Alguns arquivos do repositório são artefatos de apoio ou compatibilidade e não representam necessariamente fluxos ativos da interface principal.
-- O projeto não possui suíte automatizada de testes publicada neste repositório.
+---
 
 ## Contexto acadêmico
 
-Este projeto foi desenvolvido como parte de um trabalho acadêmico com foco em ensino de redes de computadores e demonstrações práticas de protocolos, tráfego e segurança.
+Este projeto foi desenvolvido como Trabalho de Conclusão de Curso (TCC) do **Curso Técnico em Informática**.
 
-Se a sua intenção é usar o NetLab em aula, o valor do projeto hoje está menos em "substituir ferramentas profissionais" e mais em **traduzir o que está acontecendo na rede para uma leitura visual e pedagógica**.
+O objetivo principal é **traduzir o que acontece na rede para uma leitura visual e pedagógica**, tornando conceitos de protocolos, tráfego e segurança acessíveis a estudantes sem experiência prévia em análise de rede.
 
-## Licença
+O NetLab não se propõe a substituir ferramentas profissionais como Wireshark ou Zeek. Seu valor está na **camada educacional** que envolve cada evento capturado: explicação, contexto de risco e ação sugerida, gerados automaticamente a partir do tráfego real do aluno.
 
-No estado atual do repositório, **não há um arquivo `LICENSE` publicado**. Até que uma licença explícita seja adicionada, trate o projeto como material acadêmico/educacional.
+---
+
+**Autor:** Yuri Gonçalves Pavão  
+**Instagram:** [@yuri_g0n](https://instagram.com/yuri_g0n)  
+**GitHub:** [github.com/Yurigonpav](https://github.com/Yurigonpav)
