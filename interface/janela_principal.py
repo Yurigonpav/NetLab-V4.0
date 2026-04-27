@@ -145,9 +145,10 @@ class _CapturadorPacotesThread(QThread):
     erro_ocorrido = pyqtSignal(str)
     sem_pacotes   = pyqtSignal(str)
 
-    def __init__(self, interface: str):
+    def __init__(self, interface: str, eh_wifi: bool = False):
         super().__init__()
         self.interface = interface
+        self.eh_wifi   = eh_wifi   # <-- NOVO
         self._rodando  = False
         self.sniffer   = None
         self._pps_contador  = 0
@@ -163,7 +164,7 @@ class _CapturadorPacotesThread(QThread):
                     prn=self._processar_pacote,
                     store=False,
                     filter="ip or arp",
-                    promisc=True,
+                    promisc=not self.eh_wifi,   # <-- MUDANÇA: Wi-Fi não usa promisc
                 )
                 self.sniffer.start()
                 while self._rodando:
@@ -661,7 +662,7 @@ class _WorkerRunnable(QRunnable):
                         f"Destino: {self.evento.get('ip_destino', '?')}"
                     ),
                     "nivel3": f"Dados: {self.evento}",
-                    "icone": "🔍", "nivel": "INFO",
+                    "icone": "", "nivel": "INFO",
                     "alerta_seguranca": "",
                 }
             explicacao["sessao_id"] = self.evento.get("sessao_id")
@@ -1069,12 +1070,12 @@ class JanelaPrincipal(QMainWindow):
 
         cidr = self._detectar_cidr_via_powershell(ip_interface)
         if cidr:
-            self._status(f"✅ CIDR via PowerShell: {cidr}")
+            self._status(f" CIDR via PowerShell: {cidr}")
             return cidr
 
         cidr = self._obter_cidr_via_ipconfig(ip_interface)
         if cidr:
-            self._status(f"✅ CIDR via ipconfig: {cidr}")
+            self._status(f" CIDR via ipconfig: {cidr}")
             return cidr
 
         mascara = self._mapa_interface_mascara.get(desc, "")
@@ -1082,7 +1083,7 @@ class JanelaPrincipal(QMainWindow):
             try:
                 prefixo = self._mascara_para_prefixo(mascara)
                 rede    = ipaddress.ip_network(f"{ip_interface}/{prefixo}", strict=False)
-                self._status(f"✅ CIDR via Scapy mapeamento: {rede}")
+                self._status(f" CIDR via Scapy mapeamento: {rede}")
                 return str(rede)
             except Exception:
                 pass
@@ -1090,12 +1091,12 @@ class JanelaPrincipal(QMainWindow):
         nome_dispositivo = self._mapa_interface_nome.get(desc, desc)
         cidr = self._detectar_cidr_via_scapy(nome_dispositivo)
         if cidr:
-            self._status(f"✅ CIDR via Scapy direto: {cidr}")
+            self._status(f" CIDR via Scapy direto: {cidr}")
             return cidr
 
         rede_restrita = f"{ip_interface}/32"
         self._status(
-            f"⚠ Máscara não detectada para '{desc}'. "
+            f" Máscara não detectada para '{desc}'. "
             f"Usando /32 ({rede_restrita}). "
             f"Apenas este computador aparecerá como local."
         )
@@ -1341,7 +1342,10 @@ class JanelaPrincipal(QMainWindow):
         self.analisador.iniciar_thread()
 
         try:
-            self.capturador = _CapturadorPacotesThread(interface=nome_dispositivo)
+            self.capturador = _CapturadorPacotesThread(
+                interface=nome_dispositivo,
+                eh_wifi=self._eh_wifi          # <-- NOVO
+            )
             self.capturador.erro_ocorrido.connect(self._ao_ocorrer_erro)
             self.capturador.sem_pacotes.connect(self._ao_ocorrer_erro)
             self.capturador.start()
@@ -1629,7 +1633,7 @@ class JanelaPrincipal(QMainWindow):
 
         self.descoberta_rodando = True
         self._status(
-            f"🔍 Varredura inicial: descobrindo até {limite_inicial} "
+            f" Varredura inicial: descobrindo até {limite_inicial} "
             f"dispositivo(s) na rede {cidr_varredura or 'local'}…"
         )
 
@@ -1648,14 +1652,14 @@ class JanelaPrincipal(QMainWindow):
     def _ao_concluir_varredura_inicial(self, dispositivos: list):
         total = len(dispositivos)
         self._status(
-            f"✅ Varredura inicial: {total} dispositivo(s) encontrado(s). "
+            f" Varredura inicial: {total} dispositivo(s) encontrado(s). "
             f"Captura passiva ativa."
         )
         self.descoberta_rodando = False
 
     @pyqtSlot(str)
     def _ao_erro_varredura_silencioso(self, mensagem: str):
-        self._status(f"⚠ Varredura: {mensagem[:80]}")
+        self._status(f" Varredura: {mensagem[:80]}")
         self.descoberta_rodando = False
 
     def _popular_topologia_via_arp_sistema(self):
@@ -1686,7 +1690,7 @@ class JanelaPrincipal(QMainWindow):
 
         if adicionados:
             self._status(
-                f"📋 Tabela ARP do sistema: {adicionados} dispositivo(s) "
+                f" Tabela ARP do sistema: {adicionados} dispositivo(s) "
                 f"importado(s) para a topologia."
             )
 
@@ -1701,7 +1705,7 @@ class JanelaPrincipal(QMainWindow):
 
         self._sincronizar_subredes_topologia()
         self._status(
-            f"🌐 {len(novas)} nova(s) sub-rede(s) inferida(s) via tabela de rotas."
+            f" {len(novas)} nova(s) sub-rede(s) inferida(s) via tabela de rotas."
         )
 
     @staticmethod
@@ -1760,7 +1764,7 @@ class JanelaPrincipal(QMainWindow):
 
         self.descoberta_rodando = True
         self._status(
-            f"🔄 Varrendo a rede local em busca de dispositivos em {cidr_varredura or 'local'}…"
+            f" Varrendo a rede local em busca de dispositivos em {cidr_varredura or 'local'}…"
         )
 
         self.descobridor = _DescobrirDispositivosThread(
@@ -1805,71 +1809,472 @@ class JanelaPrincipal(QMainWindow):
     # -------------------------------------------------------------------------
 
     def _exibir_diagnostico_captura(self):
+        import os
+        try:
+            import winreg
+            _winreg_ok = True
+        except ImportError:
+            _winreg_ok = False
+
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout
+
         desc_sel         = self.combo_interface.currentText()
         nome_dispositivo = self._mapa_interface_nome.get(desc_sel, desc_sel)
         ip_local         = self._mapa_interface_ip.get(desc_sel, obter_ip_local())
         mascara          = self._mapa_interface_mascara.get(desc_sel, "")
-        if self._cidr_captura:
+        cidr             = self._cidr_captura or ""
+
+        if not mascara and cidr:
             try:
-                mascara = str(ipaddress.ip_network(self._cidr_captura, strict=False).netmask)
+                import ipaddress
+                mascara = str(ipaddress.ip_network(cidr, strict=False).netmask)
             except Exception:
                 pass
-        mascara = mascara or "Não detectada"
-        cidr             = self._cidr_captura or "Não definido"
-        total_local      = self.painel_topologia.total_dispositivos()
 
+        total_local      = self.painel_topologia.total_dispositivos()
+        snap             = getattr(self, "_snapshot_atual", {})
+
+        # ── Testes ──────────────────────────────────────────────────────────────
+
+        # Admin
         is_admin = False
         try:
-            is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+            is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
         except Exception:
             pass
-        status_admin = "✅ Sim" if is_admin else "❌ Não (recomendado)"
 
-        texto = (
-            f"<h3 style='color:#3498DB;'>🔍 Diagnóstico da Captura</h3>"
-            f"<table style='font-size:11px;width:100%;'>"
-            f"<tr><td style='color:#7f8c8d;'>Interface:</td>"
-            f"    <td style='color:#ecf0f1;'>{desc_sel}</td></tr>"
-            f"<tr><td style='color:#7f8c8d;'>Dispositivo:</td>"
-            f"    <td style='color:#ecf0f1;font-family:Consolas;'>{nome_dispositivo}</td></tr>"
-            f"<tr><td style='color:#7f8c8d;'>IP local:</td>"
-            f"    <td style='color:#2ECC71;font-weight:bold;'>{ip_local}</td></tr>"
-            f"<tr><td style='color:#7f8c8d;'>Máscara:</td>"
-            f"    <td style='color:#ecf0f1;'>{mascara}</td></tr>"
-            f"<tr><td style='color:#7f8c8d;'>CIDR detectado:</td>"
-            f"    <td style='color:#F39C12;font-weight:bold;'>{cidr}</td></tr>"
-            f"<tr><td style='color:#7f8c8d;'>Dispositivos locais:</td>"
-            f"    <td style='color:#ecf0f1;'>{total_local}</td></tr>"
-            f"<tr><td style='color:#7f8c8d;'>Modo promíscuo:</td>"
-            f"    <td style='color:#2ECC71;'>Ativo</td></tr>"
-            f"<tr><td style='color:#7f8c8d;'>Rate limit (pkt/s):</td>"
-            f"    <td style='color:#2ECC71;'>{_MAX_PACOTES_POR_SEGUNDO}</td></tr>"
-            f"<tr><td style='color:#7f8c8d;'>Executando como Admin:</td>"
-            f"    <td style='color:#ecf0f1;'>{status_admin}</td></tr>"
-            f"</table>"
-            f"<hr style='border-color:#1e2d40;margin:12px 0;'>"
-            f"<p style='color:#7f8c8d;font-size:10px;'>"
-            f"Se o CIDR estiver incorreto, dispositivos da mesma rede física "
-            f"podem ser classificados como 'Internet'.</p>"
-            f"<p style='color:#e67e22;font-size:10px;margin-top:12px;'>"
-            f"<b>⚠️ Aviso sobre Wi-Fi:</b> No Windows, a captura em modo "
-            f"promíscuo pode não mostrar todo o tráfego da rede sem fio.</p>"
+        # Npcap
+        npcap_path = ""
+        npcap_ok   = False
+        if _winreg_ok:
+            try:
+                for hive, path in [
+                    (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Npcap"),
+                    (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Npcap"),
+                ]:
+                    try:
+                        with winreg.OpenKey(hive, path) as k:
+                            try:
+                                npcap_path, _ = winreg.QueryValueEx(k, "")
+                            except Exception:
+                                npcap_path = "Instalado"
+                            npcap_ok = True
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        if not npcap_ok:
+            for dll in [
+                r"C:\Windows\System32\Npcap\wpcap.dll",
+                r"C:\Windows\SysWOW64\wpcap.dll",
+            ]:
+                if os.path.exists(dll):
+                    npcap_ok   = True
+                    npcap_path = os.path.dirname(dll)
+                    break
+
+        # Wi-Fi
+        nome_lower = (nome_dispositivo or desc_sel or "").lower()
+        eh_wifi = any(p in nome_lower for p in ("wi-fi", "wifi", "wireless", "ax", "802.11"))
+
+        # Interface reconhecida pelo Scapy
+        iface_em_scapy = False
+        iface_scapy_label = ""
+        try:
+            from scapy.all import get_if_list
+            lista = get_if_list()
+            # Tenta pelo nome interno (Npcap NPF)
+            iface_em_scapy = nome_dispositivo in lista
+            if not iface_em_scapy and eh_wifi:
+                # Wi-Fi: Scapy usa \Device\NPF_{GUID}, nunca o nome amigável.
+                # Confirma presença verificando se alguma entrada NPF existe.
+                iface_em_scapy = any("NPF_" in i for i in lista)
+                iface_scapy_label = "Wi-Fi usa identificador interno (NPF)"
+            elif iface_em_scapy:
+                iface_scapy_label = "Reconhecida pelo Scapy"
+            else:
+                iface_scapy_label = "Não listada"
+        except Exception:
+            iface_scapy_label = "Não foi possível verificar"
+
+        # CIDR válido
+        cidr_ok = False
+        if cidr:
+            try:
+                ipaddress.ip_network(cidr, strict=False)
+                cidr_ok = True
+            except Exception:
+                pass
+
+        # Threads
+        thread_cap_ok  = bool(self.capturador and self.capturador.isRunning())
+        thread_anal_ok = False
+        try:
+            thread_anal_ok = bool(
+                self.analisador._thread and self.analisador._thread.is_alive()
+            )
+        except Exception:
+            pass
+
+        # Filas
+        fila_global_n  = 0
+        fila_entrada_n = 0
+        fila_saida_n   = 0
+        try:
+            from interface.analisador_trafego import fila_pacotes_global
+            fila_global_n  = len(fila_pacotes_global._fila)
+            fila_entrada_n = len(self.analisador._fila_entrada)
+            fila_saida_n   = len(self.analisador._fila_saida)
+        except Exception:
+            pass
+
+        fila_global_pct  = int(fila_global_n  / 20_000 * 100)
+        fila_entrada_pct = int(fila_entrada_n / 20_000 * 100)
+        fila_saida_pct   = int(fila_saida_n   / 5_000  * 100)
+
+        def _cor_fila(pct):
+            return "#2ECC71" if pct < 50 else ("#E67E22" if pct < 80 else "#E74C3C")
+
+        # Pacotes
+        total_pacotes = snap.get("total_pacotes", 0)
+        total_bytes   = snap.get("total_bytes", 0)
+        kb_atual      = getattr(self, "_kb_anterior", 0)
+        cap_ativa     = self.em_captura and thread_cap_ok
+        pacotes_ok    = cap_ativa and total_pacotes > 0
+
+        # Gateway via tabela ARP
+        gateway_ip  = ""
+        gateway_mac = ""
+        try:
+            for entrada in self._obter_tabela_arp_sistema():
+                partes = entrada["ip"].split(".")
+                if len(partes) == 4 and int(partes[-1]) in (1, 254):
+                    gateway_ip  = entrada["ip"]
+                    gateway_mac = entrada["mac"]
+                    break
+        except Exception:
+            pass
+
+        # Param ARP
+        param = (
+            self._param_arps
+            if self._param_arps
+            else self._parametros_iface_seguro(nome_dispositivo)
         )
+
+        # ── Checklist ──────────────────────────────────────────────────────────
+
+        ok_items  = []
+        avisos    = []
+        problemas = []
+
+        if is_admin:
+            ok_items.append("Executando como Administrador")
+        else:
+            problemas.append("Sem privilégios de Administrador — captura impossível")
+
+        if npcap_ok:
+            ok_items.append(f"Npcap instalado ({npcap_path or 'detectado via DLL'})")
+        else:
+            problemas.append("Npcap não encontrado — instale em npcap.com")
+
+        if desc_sel and "nenhuma" not in desc_sel.lower():
+            ok_items.append(f"Interface selecionada: {desc_sel}")
+        else:
+            problemas.append("Nenhuma interface válida selecionada")
+
+        if iface_em_scapy:
+            ok_items.append(f"Interface verificada no Scapy/Npcap ({iface_scapy_label})")
+        else:
+            avisos.append(f"Interface não reconhecida pelo Scapy — {iface_scapy_label}")
+
+        if cidr_ok:
+            ok_items.append(f"CIDR detectado: {cidr}")
+        else:
+            avisos.append("CIDR não detectado — dispositivos locais podem aparecer como Internet")
+
+        if eh_wifi:
+            ok_items.append("Wi-Fi: modo promíscuo desativado intencionalmente (preserva conectividade)")
+        else:
+            ok_items.append("Ethernet: modo promíscuo ativo")
+
+        if cap_ativa:
+            ok_items.append("Thread de captura ativa e responsiva")
+        elif self.em_captura:
+            problemas.append("Thread de captura iniciada mas não está respondendo")
+
+        if self.em_captura:
+            if thread_anal_ok:
+                ok_items.append("Thread de análise de pacotes ativa")
+            else:
+                problemas.append("Thread de análise inativa — eventos não estão sendo processados")
+
+        if pacotes_ok:
+            ok_items.append(f"Pacotes sendo capturados ({total_pacotes:,} total, {kb_atual:.1f} KB/s)")
+        elif self.em_captura and total_pacotes == 0:
+            problemas.append("Nenhum pacote capturado — verifique interface e Npcap")
+
+        if self.em_captura and fila_entrada_pct >= 80:
+            avisos.append(f"Fila de análise quase cheia ({fila_entrada_pct}%) — risco de descarte")
+        elif self.em_captura:
+            ok_items.append(f"Filas dentro do limite (entrada {fila_entrada_pct}%, saída {fila_saida_pct}%)")
+
+        if gateway_ip:
+            ok_items.append(f"Gateway detectado: {gateway_ip} ({gateway_mac})")
+        else:
+            avisos.append("Gateway não visível na tabela ARP do sistema")
+
+        # Score
+        n_prob = len(problemas)
+        n_avi  = len(avisos)
+
+        if n_prob == 0 and n_avi == 0:
+            sc, si, st, sf, sb = "#2ECC71", "", "Tudo funcionando corretamente", "#001a00", "#2ECC71"
+        elif n_prob == 0:
+            sc, si, st, sf, sb = "#E67E22", "", f"Funcionando com {n_avi} aviso(s)", "#1a1000", "#E67E22"
+        else:
+            sc, si, st, sf, sb = "#E74C3C", "", f"{n_prob} problema(s) crítico(s)", "#1a0000", "#E74C3C"
+
+        # ── Helpers HTML ────────────────────────────────────────────────────────
+
+        def secao(titulo, cor):
+            return (
+                f"<div style='margin:14px 0 5px 0;'>"
+                f"<span style='color:{cor};font-weight:bold;font-size:9px;"
+                f"text-transform:uppercase;letter-spacing:1px;'>{titulo}</span>"
+                f"</div>"
+                f"<hr style='border:none;border-top:1px solid {cor}44;margin:0 0 6px 0;'>"
+            )
+
+        def tr(rotulo, valor, cor_v="#ecf0f1", mono=False):
+            f = "font-family:Consolas;" if mono else ""
+            return (
+                f"<tr>"
+                f"<td style='color:#7f8c8d;padding:3px 14px 3px 0;white-space:nowrap;"
+                f"font-size:10px;vertical-align:top;width:140px;'>{rotulo}</td>"
+                f"<td style='color:{cor_v};font-size:10px;{f}'>{valor}</td>"
+                f"</tr>"
+            )
+
+        def check_item(texto, tipo):
+            cfg = {
+                "ok":    ("", "#2ECC71", "#002200"),
+                "warn":  ("",  "#E67E22", "#1f1200"),
+                "error": ("", "#E74C3C", "#200000"),
+            }[tipo]
+            return (
+                f"<div style='background:{cfg[2]};padding:4px 10px;"
+                f"border-left:3px solid {cfg[1]};margin:2px 0;border-radius:0 4px 4px 0;'>"
+                f"<span style='color:{cfg[1]};font-size:10px;'>{cfg[0]} {texto}</span>"
+                f"</div>"
+            )
+
+        def rec_item(icone, cor, texto):
+            return (
+                f"<div style='border-left:3px solid {cor};padding:6px 10px;"
+                f"margin:3px 0;background:{cor}15;border-radius:0 4px 4px 0;'>"
+                f"<span style='color:{cor};font-size:10px;'>{icone} {texto}</span>"
+                f"</div>"
+            )
+
+        # ── HTML ─────────────────────────────────────────────────────────────────
+
+        html = (
+            "<div style='font-family:Arial,sans-serif;font-size:11px;"
+            "line-height:1.6;color:#ecf0f1;'>"
+        )
+
+        # Status geral
+        html += (
+            f"<div style='background:{sf};border:2px solid {sb};"
+            f"border-radius:8px;padding:12px 16px;margin-bottom:14px;'>"
+            f"<span style='color:{sc};font-size:14px;font-weight:bold;'>{si} {st}</span>"
+            f"<span style='color:#566573;font-size:10px;margin-left:12px;'>"
+            f"{len(ok_items)} ok · {n_avi} aviso(s) · {n_prob} problema(s)</span>"
+            f"</div>"
+        )
+
+        # Checklist
+        html += secao("Checklist de Requisitos", "#3498DB")
+        for item in ok_items:
+            html += check_item(item, "ok")
+        for item in avisos:
+            html += check_item(item, "warn")
+        for item in problemas:
+            html += check_item(item, "error")
+
+        # Adaptador
+        html += secao("Adaptador de Rede", "#9B59B6")
+        html += "<table style='width:100%;'>"
+        html += tr("Interface",       desc_sel)
+        html += tr("Dispositivo",     f"<code style='font-size:9px;'>{nome_dispositivo}</code>")
+        html += tr("Tipo",            ("<span style='color:#E67E22;'>Wi-Fi 802.11</span>"
+                                        if eh_wifi else "Ethernet / LAN"))
+        html += tr("Npcap",           (f"<span style='color:#2ECC71;'> {npcap_path or 'Instalado'}</span>"
+                                        if npcap_ok else
+                                        "<span style='color:#E74C3C;'> Não encontrado</span>"))
+        html += tr("Scapy/Npcap",
+                   (f"<span style='color:#2ECC71;'> {iface_scapy_label}</span>"
+                    if iface_em_scapy else
+                    f"<span style='color:#E74C3C;'> {iface_scapy_label}</span>"))
+        html += "</table>"
+
+        # Rede
+        html += secao("Rede", "#2ECC71")
+        html += "<table style='width:100%;'>"
+        html += tr("IP local",  f"<b style='color:#2ECC71;'>{ip_local}</b>")
+        html += tr("Máscara",   mascara or "<span style='color:#E67E22;'>Não detectada</span>")
+        html += tr("CIDR",      (f"<b style='color:#F39C12;'>{cidr}</b>"
+                                   if cidr_ok else
+                                   "<span style='color:#E74C3C;'>Não definido</span>"))
+        html += tr("Gateway",   (f"{gateway_ip} <span style='color:#566573;font-size:9px;'>"
+                                   f"({gateway_mac})</span>"
+                                   if gateway_ip else
+                                   "<span style='color:#7f8c8d;'>Não detectado na tabela ARP</span>"))
+        html += tr("Dispositivos locais", str(total_local))
+        html += "</table>"
+
+        # Captura
+        html += secao("Estado da Captura", "#3498DB")
+        html += "<table style='width:100%;'>"
+        if cap_ativa:
+            html += tr("Estado", "<span style='color:#2ECC71;'> Capturando</span>")
+        elif self.em_captura:
+            html += tr("Estado", "<span style='color:#E74C3C;'> Problema na thread</span>")
+        else:
+            html += tr("Estado", "<span style='color:#7f8c8d;'> Parado</span>")
+
+        html += tr("Modo promíscuo", ("<span style='color:#E67E22;'> Desativado (Wi-Fi)</span>"
+                                       if eh_wifi else
+                                       "<span style='color:#2ECC71;'> Ativo</span>"))
+        html += tr("Rate limit",      f"{_MAX_PACOTES_POR_SEGUNDO} pkt/s")
+        html += tr("Admin",           " Sim" if is_admin else " Não")
+
+        if self.em_captura:
+            html += tr("Pacotes",     f"{total_pacotes:,}")
+            html += tr("Dados",       f"{total_bytes / 1_048_576:.2f} MB")
+            html += tr("Taxa atual",  f"{kb_atual:.1f} KB/s")
+            html += tr("Thread captura",
+                       ("<span style='color:#2ECC71;'> Ativa</span>"
+                        if thread_cap_ok else
+                        "<span style='color:#E74C3C;'> Inativa</span>"))
+            html += tr("Thread análise",
+                       ("<span style='color:#2ECC71;'> Ativa</span>"
+                        if thread_anal_ok else
+                        "<span style='color:#E74C3C;'> Inativa</span>"))
+            html += tr("Fila global",
+                       (f"<span style='color:{_cor_fila(fila_global_pct)};'>"
+                        f"{fila_global_n:,} / 20.000 ({fila_global_pct}%)</span>"))
+            html += tr("Fila análise",
+                       (f"<span style='color:{_cor_fila(fila_entrada_pct)};'>"
+                        f"{fila_entrada_n:,} / 20.000 ({fila_entrada_pct}%)</span>"))
+            html += tr("Fila saída",
+                       (f"<span style='color:{_cor_fila(fila_saida_pct)};'>"
+                        f"{fila_saida_n:,} / 5.000 ({fila_saida_pct}%)</span>"))
+
+        html += "</table>"
+
+        # Descoberta ARP
+        html += secao("Descoberta ARP", "#E67E22")
+        html += "<table style='width:100%;'>"
+        html += tr("Timer periódico",   f"{param.get('timer_ms', 30000) // 1000}s")
+        html += tr("Batch / lote",      str(param.get('batch', '—')))
+        html += tr("Pausa entre lotes", f"{int(param.get('sleep_lote', 0) * 1000)} ms")
+        html += tr("Inter-pacote",      f"{int(param.get('inter', 0) * 1000)} ms")
+        html += tr("ICMP",              ("<span style='color:#E67E22;'>Desativado (Wi-Fi)</span>"
+                                          if param.get('desativar_icmp') else
+                                          "<span style='color:#2ECC71;'>Ativo</span>"))
+        html += tr("Limite de hosts",   str(param.get('limite_hosts', '—')))
+        html += "</table>"
+
+        # Recomendações
+        recs = []
+        if not is_admin:
+            recs.append(("", "#E74C3C",
+                         "Execute o NetLab como <b>Administrador</b> para capturar pacotes."))
+        if not npcap_ok:
+            recs.append(("", "#E74C3C",
+                         "Instale o <b>Npcap</b> em npcap.com marcando "
+                         "'WinPcap API-compatible mode'."))
+        if self.em_captura and total_pacotes == 0:
+            recs.append(("", "#E74C3C",
+                         "Nenhum pacote capturado. Tente selecionar outra interface "
+                         "ou execute <code>python diagnostico.py</code> para identificar a interface ativa."))
+        if not cidr_ok and self.em_captura:
+            recs.append(("", "#E67E22",
+                         "CIDR não detectado. Dispositivos da rede podem aparecer como 'Internet'. "
+                         "Reinicie a captura ou verifique com <code>ipconfig /all</code>."))
+        if eh_wifi and self.em_captura:
+            recs.append(("", "#E67E22",
+                         "Para captura mais completa e estável, use <b>cabo Ethernet</b>. "
+                         "Wi-Fi não captura tráfego de outros dispositivos no Windows."))
+        if self.em_captura and fila_entrada_pct >= 80:
+            recs.append(("", "#E67E22",
+                         f"Fila de análise em {fila_entrada_pct}%. Reduza o tráfego "
+                         "ou reinicie a sessão para evitar descarte de pacotes."))
+        if not gateway_ip and self.em_captura:
+            recs.append(("", "#3498DB",
+                         "Gateway não detectado. Execute <code>arp -a</code> no terminal "
+                         "para verificar a tabela ARP do sistema."))
+        if self.em_captura and not thread_anal_ok:
+            recs.append(("", "#E74C3C",
+                         "Thread de análise inativa. Pare e reinicie a captura para restaurar "
+                         "o processamento de eventos."))
+
+        if recs:
+            html += secao("Recomendações", "#F39C12")
+            for icone, cor, texto in recs:
+                html += rec_item(icone, cor, texto)
+
+        # Wi-Fi — explicação da queda
+        if eh_wifi:
+            html += secao("Por que a internet pode cair em Wi-Fi?", "#566573")
+            html += (
+                "<div style='background:#0a0f1a;border:1px solid #1e2d40;"
+                "border-radius:5px;padding:10px 14px;'>"
+                "<ul style='color:#9fb2c8;font-size:10px;margin:0 0 0 14px;line-height:1.9;'>"
+                "<li><b style='color:#ecf0f1;'>Modo promíscuo:</b> causa reset de ~2s no driver "
+                "Intel. <span style='color:#2ECC71;'>Corrigido automaticamente</span> nesta versão.</li>"
+                "<li><b style='color:#ecf0f1;'>ARP sweep:</b> lotes de 8 pacotes com pausa de "
+                "250ms. Roteadores sensíveis podem acionar proteção anti-flood.</li>"
+                "<li><b style='color:#ecf0f1;'>Injeção Npcap:</b> <code>srp()</code> injeta "
+                "diretamente no adaptador, podendo interferir com o stack Wi-Fi.</li>"
+                "</ul>"
+                "<p style='color:#566573;font-size:9px;margin:8px 0 0 0;'>"
+                " Solução definitiva: use cabo Ethernet para capturas longas."
+                "</p></div>"
+            )
+
+        html += "</div>"
+
+        # ── Dialog ───────────────────────────────────────────────────────────────
 
         dialogo = QDialog(self)
         dialogo.setWindowTitle("Diagnóstico de Captura")
-        dialogo.setMinimumSize(480, 360)
-        layout = QVBoxLayout(dialogo)
+        dialogo.setMinimumSize(560, 640)
+        layout_d = QVBoxLayout(dialogo)
+        layout_d.setSpacing(4)
 
         txt = QTextEdit()
         txt.setReadOnly(True)
-        txt.setHtml(texto)
-        txt.setStyleSheet("background:#0f1423;border:none;")
-        layout.addWidget(txt)
+        txt.setHtml(html)
+        txt.setStyleSheet("QTextEdit { background:#0f1423; border:none; padding:8px; }")
+        layout_d.addWidget(txt)
 
-        botoes = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        botoes.accepted.connect(dialogo.accept)
-        layout.addWidget(botoes)
+        row_btn = QHBoxLayout()
+        btn_refresh = QPushButton(" Atualizar")
+        btn_refresh.setToolTip("Roda o diagnóstico novamente com os dados atuais")
+        btn_refresh.clicked.connect(
+            lambda: (dialogo.accept(), self._exibir_diagnostico_captura())
+        )
+        row_btn.addWidget(btn_refresh)
+        row_btn.addStretch()
+        btn_ok = QPushButton("OK")
+        btn_ok.clicked.connect(dialogo.accept)
+        row_btn.addWidget(btn_ok)
+        layout_d.addLayout(row_btn)
+
         dialogo.exec()
 
     # -------------------------------------------------------------------------
@@ -1933,7 +2338,7 @@ class JanelaPrincipal(QMainWindow):
         Versão simplificada: usa QTimer.singleShot para redirecionar
         o callback para a UI thread de forma segura no PyQt6.
         """
-        self._status("🔄 Baixando base de fabricantes do Wireshark… (em segundo plano)")
+        self._status(" Baixando base de fabricantes do Wireshark… (em segundo plano)")
 
         def ao_concluir(sucesso: bool, mensagem: str):
             # Agenda execução na UI thread via QTimer (thread-safe)
@@ -1949,10 +2354,10 @@ class JanelaPrincipal(QMainWindow):
         sucesso, mensagem = getattr(self, "_resultado_atualizacao_oui", (False, ""))
 
         if sucesso:
-            self._status(f"✅ {mensagem}")
-            QMessageBox.information(self, "Base OUI Atualizada", f"✅ {mensagem}")
+            self._status(f" {mensagem}")
+            QMessageBox.information(self, "Base OUI Atualizada", f" {mensagem}")
         else:
-            self._status(f"⚠ Falha: {mensagem}")
+            self._status(f" Falha: {mensagem}")
             QMessageBox.warning(self, "Falha na Atualização", mensagem)
 
     def closeEvent(self, evento):
