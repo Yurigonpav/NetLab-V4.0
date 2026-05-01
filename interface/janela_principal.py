@@ -935,13 +935,14 @@ class JanelaPrincipal(QMainWindow):
                     idx = ips.index(ip_v4)
                     if idx < len(mascaras):
                         candidato = mascaras[idx]
-                        if candidato and '.' in str(candidato):
+                        # Descarta 0.0.0.0 — Wi-Fi no Scapy retorna máscara inválida
+                        if candidato and '.' in str(candidato) and str(candidato) != '0.0.0.0':
                             self._mapa_interface_mascara[desc] = str(candidato)
                 except Exception:
                     pass
                 if desc not in self._mapa_interface_mascara:
                     for mask_candidata in mascaras:
-                        if mask_candidata and '.' in str(mask_candidata):
+                        if mask_candidata and '.' in str(mask_candidata) and str(mask_candidata) != '0.0.0.0':
                             self._mapa_interface_mascara[desc] = str(mask_candidata)
                             break
 
@@ -953,6 +954,25 @@ class JanelaPrincipal(QMainWindow):
                         break
 
             self._aplicar_info_windows_interface(desc, nome, interfaces_windows)
+
+            # Se a máscara ainda estiver ausente após o Scapy, busca diretamente
+            # nos dados do PowerShell estruturado (interfaces_windows)
+            if desc not in self._mapa_interface_mascara or not self._mapa_interface_mascara.get(desc):
+                for iw in interfaces_windows:
+                    iw_ip = iw.get("ip", "")
+                    iw_mask = iw.get("mascara", "")
+                    iw_desc = self._normalizar_nome_iface(iw.get("descricao", ""))
+                    iw_alias = self._normalizar_nome_iface(iw.get("alias", ""))
+                    if iw_ip and iw_mask and iw_mask != "0.0.0.0":
+                        if (
+                            ip_v4 and ip_v4 == iw_ip
+                            or self._normalizar_nome_iface(desc) in (iw_desc, iw_alias)
+                            or self._normalizar_nome_iface(nome) in (iw_desc, iw_alias)
+                        ):
+                            self._mapa_interface_mascara[desc] = iw_mask
+                            if not self._mapa_interface_ip.get(desc):
+                                self._mapa_interface_ip[desc] = iw_ip
+                            break
 
         ip_local = obter_ip_local()
         if ip_local:
@@ -1201,53 +1221,99 @@ class JanelaPrincipal(QMainWindow):
         return ""
 
     def _cidr_da_interface(self, desc: str) -> str:
+        """
+        Detecta o CIDR da interface selecionada.
+
+        Ordem de prioridade (da mais confiável para a mais lenta):
+          1. IP + máscara já mapeados internamente (populados em _popular_interfaces)
+          2. Dados estruturados do Windows via PowerShell (Get-NetIPAddress/Get-NetAdapter)
+          3. PowerShell direto pelo IP (Get-NetIPAddress -IPAddress)
+          4. ipconfig /all (parsing de texto)
+          5. Scapy (get_if_addr + get_if_netmask)
+          6. Fallback /24 com aviso explícito
+        """
         nome_dispositivo = self._mapa_interface_nome.get(desc, desc)
+
+        # ── Prioridade 1: IP + máscara já mapeados — rápido e sem I/O externo ──
+        ip_mapeado      = self._mapa_interface_ip.get(desc, "")
+        mascara_mapeada = self._mapa_interface_mascara.get(desc, "")
+
+        if ip_mapeado and mascara_mapeada and "." in mascara_mapeada:
+            cidr = self._cidr_por_ip_mascara(ip_mapeado, mascara_mapeada)
+            if cidr:
+                self._status(f" CIDR detectado pelos mapas internos: {cidr}")
+                return cidr
+
+        # ── Prioridade 2: dados estruturados do Windows (PowerShell + Get-NetAdapter) ──
         info_windows = self._info_windows_para_interface(desc, nome_dispositivo)
         if info_windows:
-            if info_windows.get("ip"):
-                self._mapa_interface_ip[desc] = info_windows["ip"]
-            if info_windows.get("mascara"):
-                self._mapa_interface_mascara[desc] = info_windows["mascara"]
+            ip_w      = info_windows.get("ip", "")
+            mascara_w = info_windows.get("mascara", "")
+
+            # Atualiza os mapas com dados frescos do Windows
+            if ip_w:
+                self._mapa_interface_ip[desc] = ip_w
+            if mascara_w:
+                self._mapa_interface_mascara[desc] = mascara_w
+
+            # Retorna o CIDR pré-calculado pelo PowerShell estruturado
             if info_windows.get("cidr"):
-                self._status(f" CIDR via Windows: {info_windows['cidr']}")
+                self._status(f" CIDR via Windows (PowerShell estruturado): {info_windows['cidr']}")
                 return info_windows["cidr"]
 
-        ip_interface = self._mapa_interface_ip.get(desc, "") or obter_ip_local()
+            # Calcula a partir de ip + máscara recém-obtidos
+            if ip_w and mascara_w:
+                cidr = self._cidr_por_ip_mascara(ip_w, mascara_w)
+                if cidr:
+                    self._status(f" CIDR calculado a partir do Windows: {cidr}")
+                    return cidr
+
+        # ── IP de trabalho para as tentativas seguintes ─────────────────────────
+        ip_interface = (
+            self._mapa_interface_ip.get(desc, "")
+            or ip_mapeado
+            or obter_ip_local()
+        )
         if not ip_interface or ip_interface == "127.0.0.1":
             return ""
 
+        # ── Prioridade 3: PowerShell direto pelo IP ─────────────────────────────
         cidr = self._detectar_cidr_via_powershell(ip_interface)
         if cidr:
-            self._status(f" CIDR via PowerShell: {cidr}")
+            self._status(f" CIDR via PowerShell (Get-NetIPAddress): {cidr}")
             return cidr
 
+        # ── Prioridade 4: ipconfig /all ─────────────────────────────────────────
         cidr = self._obter_cidr_via_ipconfig(ip_interface)
         if cidr:
-            self._status(f" CIDR via ipconfig: {cidr}")
+            self._status(f" CIDR via ipconfig /all: {cidr}")
             return cidr
 
-        mascara = self._mapa_interface_mascara.get(desc, "")
-        if mascara and '.' in mascara:
-            cidr = self._cidr_por_ip_mascara(ip_interface, mascara)
+        # ── Prioridade 5: máscara dos mapas internos + IP de trabalho ───────────
+        mascara_final = self._mapa_interface_mascara.get(desc, "")
+        if mascara_final and "." in mascara_final:
+            cidr = self._cidr_por_ip_mascara(ip_interface, mascara_final)
             if cidr:
-                self._status(f" CIDR via mascara da interface: {cidr}")
+                self._status(f" CIDR via máscara interna + IP de trabalho: {cidr}")
                 return cidr
 
+        # ── Prioridade 6: Scapy (get_if_addr + get_if_netmask) ─────────────────
         cidr = self._detectar_cidr_via_scapy(nome_dispositivo)
         if cidr:
-            self._status(f" CIDR via Scapy direto: {cidr}")
+            self._status(f" CIDR via Scapy: {cidr}")
             return cidr
 
-        rede_fallback = f"{ip_interface}/24"
+        # ── Fallback /24 ────────────────────────────────────────────────────────
         try:
-            rede_obj = ipaddress.ip_network(rede_fallback, strict=False)
+            rede_obj = ipaddress.ip_network(f"{ip_interface}/24", strict=False)
             rede_str = str(rede_obj)
         except Exception:
-            rede_str = rede_fallback
+            rede_str = f"{ip_interface}/24"
 
         self._status(
-            f" Máscara não detectada para '{desc}'. "
-            f"Usando fallback /24 ({rede_str})."
+            f" Máscara não detectada para '{desc}' — "
+            f"usando fallback /24 ({rede_str}). "
+            f"Dispositivos locais podem aparecer como Internet."
         )
         return rede_str
 
