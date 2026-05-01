@@ -7,6 +7,7 @@ import ipaddress
 import subprocess
 import re
 import ctypes
+import json
 from collections import deque
 
 from PyQt6.QtWidgets import (
@@ -137,6 +138,7 @@ def obter_interfaces_disponiveis() -> list:
 # ============================================================================
 
 _MAX_PACOTES_POR_SEGUNDO = 800
+_MAX_PACOTES_WIFI_POR_SEGUNDO = 400
 
 
 class _CapturadorPacotesThread(QThread):
@@ -151,6 +153,10 @@ class _CapturadorPacotesThread(QThread):
         self.sniffer   = None
         self._pps_contador  = 0
         self._pps_reset_ts  = 0.0
+        self._limite_pps    = (
+            _MAX_PACOTES_WIFI_POR_SEGUNDO
+            if eh_wifi else _MAX_PACOTES_POR_SEGUNDO
+        )
 
     def run(self):
         self._rodando = True
@@ -198,7 +204,7 @@ class _CapturadorPacotesThread(QThread):
             self._pps_contador = 0
             self._pps_reset_ts = agora
         self._pps_contador += 1
-        if self._pps_contador > _MAX_PACOTES_POR_SEGUNDO:
+        if self._pps_contador > self._limite_pps:
             return
         try:
             self._parsear_e_enfileirar(pacote)
@@ -346,6 +352,7 @@ class _DescobrirDispositivosThread(QThread):
             "tentativas":     self.TENTATIVAS,
             "limite_hosts":   self.MAX_HOSTS,
             "desativar_icmp": False,
+            "descoberta_ativa": True,
             "wifi":           False,
             "timer_ms":       30000,
         }
@@ -355,6 +362,13 @@ class _DescobrirDispositivosThread(QThread):
 
     def run(self):
         try:
+            if not self._param_arps.get("descoberta_ativa", True):
+                self.progresso_atualizado.emit(
+                    "Descoberta ativa desativada para esta interface."
+                )
+                self.varredura_concluida.emit([])
+                return
+
             rede_cidr = self.cidr or self._detectar_cidr() or self._cidr_por_ip_local()
             if not rede_cidr:
                 self.erro_ocorrido.emit(
@@ -688,6 +702,8 @@ class JanelaPrincipal(QMainWindow):
         self._mapa_interface_nome:    dict = {}
         self._mapa_interface_ip:      dict = {}
         self._mapa_interface_mascara: dict = {}
+        self._cache_interfaces_windows: list = []
+        self._cache_interfaces_windows_ts: float = 0.0
         self._interface_captura = ""
         self._cidr_captura      = ""
 
@@ -875,6 +891,7 @@ class JanelaPrincipal(QMainWindow):
         self._mapa_interface_nome.clear()
         self._mapa_interface_ip.clear()
         self._mapa_interface_mascara.clear()
+        interfaces_windows = self._interfaces_ipv4_windows(force=True)
 
         try:
             from scapy.arch.windows import get_windows_if_list
@@ -883,9 +900,15 @@ class JanelaPrincipal(QMainWindow):
             interfaces_raw = []
 
         if not interfaces_raw:
-            for desc in obter_interfaces_disponiveis():
+            nomes_fallback = [
+                item["descricao"] or item["alias"]
+                for item in interfaces_windows
+                if item.get("descricao") or item.get("alias")
+            ] or obter_interfaces_disponiveis()
+            for desc in nomes_fallback:
                 self.combo_interface.addItem(desc)
                 self._mapa_interface_nome[desc] = desc
+                self._aplicar_info_windows_interface(desc, desc, interfaces_windows)
             self._selecionar_interface_fallback()
             return
 
@@ -929,6 +952,8 @@ class JanelaPrincipal(QMainWindow):
                         self._mapa_interface_mascara[desc] = str(v)
                         break
 
+            self._aplicar_info_windows_interface(desc, nome, interfaces_windows)
+
         ip_local = obter_ip_local()
         if ip_local:
             for iface in interfaces_raw:
@@ -955,11 +980,132 @@ class JanelaPrincipal(QMainWindow):
             pass
 
     @staticmethod
+    def _prefixo_para_mascara(prefixo: int) -> str:
+        try:
+            prefixo = max(0, min(32, int(prefixo)))
+            return str(ipaddress.ip_network(f"0.0.0.0/{prefixo}").netmask)
+        except Exception:
+            return ""
+
+    @staticmethod
     def _mascara_para_prefixo(mascara: str) -> int:
         try:
             return sum(bin(int(p)).count("1") for p in mascara.split("."))
         except Exception:
             return 24
+
+    def _interfaces_ipv4_windows(self, force: bool = False) -> list:
+        if (
+            not force
+            and self._cache_interfaces_windows
+            and time.time() - self._cache_interfaces_windows_ts < 30
+        ):
+            return list(self._cache_interfaces_windows)
+
+        comando = (
+            "$ips = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' }; "
+            "$adapters = Get-NetAdapter -ErrorAction SilentlyContinue; "
+            "$ips | ForEach-Object { "
+            "$ip = $_; "
+            "$ad = $adapters | Where-Object { $_.ifIndex -eq $ip.InterfaceIndex } | Select-Object -First 1; "
+            "[PSCustomObject]@{"
+            "InterfaceAlias=$ip.InterfaceAlias;"
+            "InterfaceDescription=$ad.InterfaceDescription;"
+            "InterfaceIndex=$ip.InterfaceIndex;"
+            "IPAddress=$ip.IPAddress;"
+            "PrefixLength=$ip.PrefixLength"
+            "} } | ConvertTo-Json -Depth 3"
+        )
+        try:
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", comando],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            saida = (proc.stdout or "").strip()
+            if not saida:
+                return []
+            dados = json.loads(saida)
+            if isinstance(dados, dict):
+                dados = [dados]
+
+            interfaces = []
+            for item in dados:
+                ip = str(item.get("IPAddress") or "")
+                if not ip or ip.count(".") != 3:
+                    continue
+                try:
+                    prefixo = int(item.get("PrefixLength"))
+                    rede = ipaddress.ip_network(f"{ip}/{prefixo}", strict=False)
+                except Exception:
+                    continue
+                interfaces.append({
+                    "alias": str(item.get("InterfaceAlias") or ""),
+                    "descricao": str(item.get("InterfaceDescription") or ""),
+                    "indice": str(item.get("InterfaceIndex") or ""),
+                    "ip": ip,
+                    "prefixo": prefixo,
+                    "mascara": self._prefixo_para_mascara(prefixo),
+                    "cidr": str(rede),
+                })
+
+            self._cache_interfaces_windows = interfaces
+            self._cache_interfaces_windows_ts = time.time()
+            return list(interfaces)
+        except Exception:
+            return []
+
+    @staticmethod
+    def _normalizar_nome_iface(texto: str) -> str:
+        return re.sub(r"\s+", " ", (texto or "").lower()).strip()
+
+    def _info_windows_para_interface(self, desc: str, nome: str = "") -> dict:
+        alvos = {
+            self._normalizar_nome_iface(desc),
+            self._normalizar_nome_iface(nome),
+        }
+        alvos.discard("")
+        interfaces = self._interfaces_ipv4_windows()
+        for item in interfaces:
+            campos = {
+                self._normalizar_nome_iface(item.get("descricao", "")),
+                self._normalizar_nome_iface(item.get("alias", "")),
+            }
+            if alvos & campos:
+                return item
+        for item in interfaces:
+            campos = [
+                self._normalizar_nome_iface(item.get("descricao", "")),
+                self._normalizar_nome_iface(item.get("alias", "")),
+            ]
+            if any(a and c and (a in c or c in a) for a in alvos for c in campos):
+                return item
+        return {}
+
+    def _aplicar_info_windows_interface(self, desc: str, nome: str, interfaces_windows: list):
+        info = {}
+        alvos = {
+            self._normalizar_nome_iface(desc),
+            self._normalizar_nome_iface(nome),
+        }
+        alvos.discard("")
+        for item in interfaces_windows:
+            campos = {
+                self._normalizar_nome_iface(item.get("descricao", "")),
+                self._normalizar_nome_iface(item.get("alias", "")),
+            }
+            if alvos & campos:
+                info = item
+                break
+        if not info:
+            return
+        if info.get("ip"):
+            self._mapa_interface_ip[desc] = info["ip"]
+        if info.get("mascara"):
+            self._mapa_interface_mascara[desc] = info["mascara"]
 
     @staticmethod
     def _detectar_cidr_via_powershell(ip_local: str) -> str:
@@ -1046,6 +1192,17 @@ class JanelaPrincipal(QMainWindow):
         return ""
 
     def _cidr_da_interface(self, desc: str) -> str:
+        nome_dispositivo = self._mapa_interface_nome.get(desc, desc)
+        info_windows = self._info_windows_para_interface(desc, nome_dispositivo)
+        if info_windows:
+            if info_windows.get("ip"):
+                self._mapa_interface_ip[desc] = info_windows["ip"]
+            if info_windows.get("mascara"):
+                self._mapa_interface_mascara[desc] = info_windows["mascara"]
+            if info_windows.get("cidr"):
+                self._status(f" CIDR via Windows: {info_windows['cidr']}")
+                return info_windows["cidr"]
+
         ip_interface = self._mapa_interface_ip.get(desc, "") or obter_ip_local()
         if not ip_interface or ip_interface == "127.0.0.1":
             return ""
@@ -1070,7 +1227,6 @@ class JanelaPrincipal(QMainWindow):
             except Exception:
                 pass
 
-        nome_dispositivo = self._mapa_interface_nome.get(desc, desc)
         cidr = self._detectar_cidr_via_scapy(nome_dispositivo)
         if cidr:
             self._status(f" CIDR via Scapy direto: {cidr}")
@@ -1099,6 +1255,7 @@ class JanelaPrincipal(QMainWindow):
         base = {
             "limite_hosts":   100,
             "desativar_icmp": False,
+            "descoberta_ativa": True,
             "tentativas":     _DescobrirDispositivosThread.TENTATIVAS,
             "timeout":        _DescobrirDispositivosThread.TIMEOUT_ARP,
             "pausa":          _DescobrirDispositivosThread.PAUSA_RODADAS,
@@ -1111,13 +1268,14 @@ class JanelaPrincipal(QMainWindow):
 
         if eh_wifi:
             base.update({
-                "batch":          8,
-                "sleep_lote":     0.25,
-                "pausa":          3.0,
-                "timeout":        3.5,
-                "tentativas":     2,
+                "batch":          0,
+                "sleep_lote":     0.0,
+                "pausa":          0.0,
+                "timeout":        0.0,
+                "tentativas":     0,
                 "desativar_icmp": True,
-                "timer_ms":       300_000,
+                "descoberta_ativa": False,
+                "timer_ms":       60_000,
             })
 
         return base
@@ -1596,6 +1754,13 @@ class JanelaPrincipal(QMainWindow):
     def _varredura_inicial_segura(self):
         if not self.em_captura or not self._interface_captura:
             return
+        if self._eh_wifi or not self._param_arps.get("descoberta_ativa", True):
+            self._popular_topologia_via_arp_sistema()
+            self._status(
+                " Wi-Fi em modo laboratorio: descoberta ativa desativada; "
+                "usando tabela ARP do Windows e captura passiva."
+            )
+            return
         if self.descoberta_rodando or (
             self.descobridor and self.descobridor.isRunning()
         ):
@@ -1739,6 +1904,13 @@ class JanelaPrincipal(QMainWindow):
     def _descoberta_periodica(self):
         if not self.em_captura:
             return
+        if self._eh_wifi or not self._param_arps.get("descoberta_ativa", True):
+            self._popular_topologia_via_arp_sistema()
+            self._status(
+                " Descoberta Wi-Fi segura: tabela ARP do sistema atualizada "
+                "sem injetar pacotes."
+            )
+            return
         if self.descoberta_rodando or (
             self.descobridor and self.descobridor.isRunning()
         ):
@@ -1810,6 +1982,14 @@ class JanelaPrincipal(QMainWindow):
         ip_local         = self._mapa_interface_ip.get(desc_sel, obter_ip_local())
         mascara          = self._mapa_interface_mascara.get(desc_sel, "")
         cidr             = self._cidr_captura or ""
+
+        if not cidr and desc_sel:
+            cidr = self._cidr_da_interface(desc_sel)
+            if cidr:
+                self._cidr_captura = cidr
+                self.painel_topologia.definir_rede_local(cidr)
+                ip_local = self._mapa_interface_ip.get(desc_sel, ip_local)
+                mascara = self._mapa_interface_mascara.get(desc_sel, mascara)
 
         if not mascara and cidr:
             try:
@@ -1948,6 +2128,10 @@ class JanelaPrincipal(QMainWindow):
             if self._param_arps
             else self._parametros_iface_seguro(nome_dispositivo)
         )
+        limite_pps = (
+            _MAX_PACOTES_WIFI_POR_SEGUNDO
+            if eh_wifi else _MAX_PACOTES_POR_SEGUNDO
+        )
 
         # ── Checklist ──────────────────────────────────────────────────────────
 
@@ -1982,6 +2166,8 @@ class JanelaPrincipal(QMainWindow):
 
         if eh_wifi:
             ok_items.append("Wi-Fi: modo promíscuo desativado intencionalmente (preserva conectividade)")
+            if not param.get("descoberta_ativa", True):
+                ok_items.append("Wi-Fi: descoberta ativa sem injecao de pacotes (modo laboratorio)")
         else:
             ok_items.append("Ethernet: modo promíscuo ativo")
 
@@ -2134,7 +2320,7 @@ class JanelaPrincipal(QMainWindow):
         html += tr("Modo promíscuo", ("<span style='color:#E67E22;'> Desativado (Wi-Fi)</span>"
                                        if eh_wifi else
                                        "<span style='color:#2ECC71;'> Ativo</span>"))
-        html += tr("Rate limit",      f"{_MAX_PACOTES_POR_SEGUNDO} pkt/s")
+        html += tr("Rate limit",      f"{limite_pps} pkt/s")
         html += tr("Admin",           " Sim" if is_admin else " Não")
 
         if self.em_captura:
@@ -2164,10 +2350,17 @@ class JanelaPrincipal(QMainWindow):
         # Descoberta ARP
         html += secao("Descoberta ARP", "#E67E22")
         html += "<table style='width:100%;'>"
+        descoberta_ativa = param.get("descoberta_ativa", True)
+        html += tr(
+            "Modo",
+            ("<span style='color:#2ECC71;'>Passivo + ARP do sistema</span>"
+             if not descoberta_ativa else
+             "<span style='color:#E67E22;'>ARP sweep ativo</span>")
+        )
         html += tr("Timer periódico",   f"{param.get('timer_ms', 30000) // 1000}s")
-        html += tr("Batch / lote",      str(param.get('batch', '—')))
-        html += tr("Pausa entre lotes", f"{int(param.get('sleep_lote', 0) * 1000)} ms")
-        html += tr("Inter-pacote",      f"{int(param.get('inter', 0) * 1000)} ms")
+        html += tr("Batch / lote",      ("Desativado" if not descoberta_ativa else str(param.get('batch', '—'))))
+        html += tr("Pausa entre lotes", ("N/A" if not descoberta_ativa else f"{int(param.get('sleep_lote', 0) * 1000)} ms"))
+        html += tr("Inter-pacote",      ("N/A" if not descoberta_ativa else f"{int(param.get('inter', 0) * 1000)} ms"))
         html += tr("ICMP",              ("<span style='color:#E67E22;'>Desativado (Wi-Fi)</span>"
                                           if param.get('desativar_icmp') else
                                           "<span style='color:#2ECC71;'>Ativo</span>"))
@@ -2213,22 +2406,23 @@ class JanelaPrincipal(QMainWindow):
             for icone, cor, texto in recs:
                 html += rec_item(icone, cor, texto)
 
-        # Wi-Fi — explicação da queda
+        # Wi-Fi — estabilidade
         if eh_wifi:
-            html += secao("Por que a internet pode cair em Wi-Fi?", "#566573")
+            html += secao("Estabilidade em Wi-Fi", "#566573")
             html += (
                 "<div style='background:#0a0f1a;border:1px solid #1e2d40;"
                 "border-radius:5px;padding:10px 14px;'>"
                 "<ul style='color:#9fb2c8;font-size:10px;margin:0 0 0 14px;line-height:1.9;'>"
-                "<li><b style='color:#ecf0f1;'>Modo promíscuo:</b> causa reset de ~2s no driver "
-                "Intel. <span style='color:#2ECC71;'>Corrigido automaticamente</span> nesta versão.</li>"
-                "<li><b style='color:#ecf0f1;'>ARP sweep:</b> lotes de 8 pacotes com pausa de "
-                "250ms. Roteadores sensíveis podem acionar proteção anti-flood.</li>"
-                "<li><b style='color:#ecf0f1;'>Injeção Npcap:</b> <code>srp()</code> injeta "
-                "diretamente no adaptador, podendo interferir com o stack Wi-Fi.</li>"
+                "<li><b style='color:#ecf0f1;'>Modo promíscuo:</b> permanece desativado no Wi-Fi "
+                "para evitar reset do driver.</li>"
+                "<li><b style='color:#ecf0f1;'>ARP sweep automático:</b> desativado no Wi-Fi. "
+                "O NetLab usa a tabela ARP do Windows e pacotes observados passivamente.</li>"
+                "<li><b style='color:#ecf0f1;'>Npcap:</b> a captura fica em modo passivo; "
+                "nenhum <code>srp()</code> periódico é executado no adaptador Wi-Fi.</li>"
                 "</ul>"
                 "<p style='color:#566573;font-size:9px;margin:8px 0 0 0;'>"
-                " Solução definitiva: use cabo Ethernet para capturas longas."
+                " Para enxergar tráfego de outros dispositivos com máxima fidelidade, "
+                "use cabo Ethernet ou espelhamento de porta no switch."
                 "</p></div>"
             )
 

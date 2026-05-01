@@ -101,9 +101,6 @@ def _carregar_parser_c():
     caminho = Path(__file__).parent / nome
 
     if not caminho.exists():
-        print(
-            f"[NetLab] {nome} nao encontrado — usando parser Python."
-        )
         return None
 
     try:
@@ -118,7 +115,7 @@ def _carregar_parser_c():
         print(f"[NetLab] Parser C carregado: {caminho}")
         return fn
     except Exception as e:
-        print(f"[NetLab] Falha ao carregar {nome}: {e} — usando Python.")
+        print(f"[NetLab] Parser C opcional indisponivel ({e}). Usando parser Python.")
         return None
 
 
