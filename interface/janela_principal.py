@@ -8,17 +8,15 @@ import subprocess
 import re
 import ctypes
 from collections import deque
-from typing import Optional
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout,
     QLabel, QPushButton, QComboBox,
-    QMessageBox, QToolBar, QTabWidget,
+    QMessageBox, QTabWidget,
     QDialog, QHBoxLayout, QTextEdit,
-    QDialogButtonBox, QFrame
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot, QThread, pyqtSignal, QObject, QRunnable, QThreadPool
-from PyQt6.QtGui import QAction, QFont
+from PyQt6.QtCore import QTimer, pyqtSlot, QThread, pyqtSignal, QObject, QRunnable, QThreadPool
+from PyQt6.QtGui import QAction
 
 from analisador_pacotes import AnalisadorPacotes
 from motor_pedagogico import MotorPedagogico
@@ -1078,13 +1076,18 @@ class JanelaPrincipal(QMainWindow):
             self._status(f" CIDR via Scapy direto: {cidr}")
             return cidr
 
-        rede_restrita = f"{ip_interface}/32"
+        rede_fallback = f"{ip_interface}/24"
+        try:
+            rede_obj = ipaddress.ip_network(rede_fallback, strict=False)
+            rede_str = str(rede_obj)
+        except Exception:
+            rede_str = rede_fallback
+
         self._status(
             f" Máscara não detectada para '{desc}'. "
-            f"Usando /32 ({rede_restrita}). "
-            f"Apenas este computador aparecerá como local."
+            f"Usando fallback /24 ({rede_str})."
         )
-        return rede_restrita
+        return rede_str
 
     def _parametros_iface_seguro(self, nome_iface: str) -> dict:
         nome_lower = (nome_iface or "").lower()
@@ -1604,8 +1607,8 @@ class JanelaPrincipal(QMainWindow):
 
         parametros_leves = {
             "limite_hosts":   limite_inicial,
-            "tentativas":     1,
-            "timeout":        0.8,
+            "tentativas":     2 if self._eh_wifi else 2,
+            "timeout":        2.8 if self._eh_wifi else 1.8,
             "batch":          8 if self._eh_wifi else 32,
             "inter":          0.02,
             "sleep_lote":     0.25 if self._eh_wifi else 0.05,
@@ -1906,7 +1909,6 @@ class JanelaPrincipal(QMainWindow):
         fila_entrada_n = 0
         fila_saida_n   = 0
         try:
-            from interface.analisador_trafego import fila_pacotes_global
             fila_global_n  = len(fila_pacotes_global._fila)
             fila_entrada_n = len(self.analisador._fila_entrada)
             fila_saida_n   = len(self.analisador._fila_saida)

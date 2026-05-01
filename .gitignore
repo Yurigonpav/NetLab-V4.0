@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+
+.venv/
+venv/
+env/
+
+*.dll
+*.so
+*.dylib
+
+dados/*.db
+dados/*.json
+dados/*.tmp

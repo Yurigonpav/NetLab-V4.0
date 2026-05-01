@@ -6,8 +6,6 @@ import sys
 import os
 
 from PyQt6.QtWidgets import QApplication, QStyleFactory
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPalette, QColor
 
 from interface.janela_principal import JanelaPrincipal
 

@@ -28,7 +28,6 @@ import os
 import sys
 import time
 import threading
-from collections import deque
 from typing import Tuple, List
 
 # ─── Localização automática da biblioteca nativa ─────────────────────────────

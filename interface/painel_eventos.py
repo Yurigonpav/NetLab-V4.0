@@ -26,16 +26,15 @@
 #   - Lazy loading: filtros reaplicados só ao abrir a aba
 
 from collections import defaultdict, deque
-import time
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QScrollArea, QFrame, QPushButton, QTextEdit,
     QSplitter, QTabWidget, QLineEdit, QComboBox,
-    QTableWidget, QTableWidgetItem, QHeaderView,
+    QTableWidget,
     QProgressBar, QGridLayout, QListWidget, QListWidgetItem
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtCore import Qt, pyqtSlot
+from PyQt6.QtGui import QFont
 from utils.constantes import CLASSIFICACAO_USO
 from utils.rede import formatar_bytes, corrigir_mojibake
 
@@ -106,7 +105,7 @@ DOMINIOS_CONHECIDOS = {
     "fbcdn.net": "Facebook CDN",      "whatsapp.com": "WhatsApp",
     "whatsapp.net": "WhatsApp",       "twitter.com": "Twitter/X",
     "twimg.com": "Twitter CDN",       "x.com": "X (Twitter)",
-    "netflix.com": "Netflix",         "nflxvideo.net": "Netflix Vídeo",
+    "netflix.com": "Netflix",
     "amazon.com": "Amazon",           "amazonaws.com": "Amazon AWS",
     "microsoft.com": "Microsoft",     "office.com": "Microsoft Office",
     "live.com": "Microsoft Live",     "outlook.com": "Outlook",

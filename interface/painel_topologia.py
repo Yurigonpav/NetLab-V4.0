@@ -32,6 +32,7 @@ from PyQt6.QtGui import (
     QRadialGradient, QCursor, QPainterPath, QFontMetrics
 )
 from utils.identificador import (
+    GerenciadorDispositivos,
     carregar_aliases,
     chave_alias_dispositivo,
     inferir_tipo_dispositivo,
@@ -40,7 +41,6 @@ from utils.identificador import (
     obter_fabricante,
     salvar_aliases,
 )
-from utils.identificador import GerenciadorDispositivos   # PASSO 1 — novo import
 from utils.rede import obter_ip_local, eh_endereco_valido
 
 
@@ -97,7 +97,6 @@ class PainelDetalhes(QFrame):
 
         # Campos de informacao
         self._campos: Dict[str, QLabel] = {}
-        # PASSO 2 — campos_def atualizado com fabricante e apelido
         campos_def = [
             ("ip",         "IP"),
             ("mac",        "MAC"),
@@ -107,8 +106,8 @@ class PainelDetalhes(QFrame):
             ("portas",     "Portas"),
             ("status",     "Status"),
             ("confianca",  "Confiança"),
-            ("fabricante", "Fabricante"),   # NOVO
-            ("apelido",    "Apelido"),      # NOVO
+            ("fabricante", "Fabricante"),
+            ("apelido",    "Apelido"),
         ]
         for chave, rotulo in campos_def:
             linha = QHBoxLayout()
@@ -171,12 +170,10 @@ class PainelDetalhes(QFrame):
         else:
             self._campos["confianca"].setStyleSheet("color: #f39c12; font-size:10px;")
 
-        # PASSO 3 — Fabricante e Apelido
         mac_disp = dados.get("mac") or ""
         fabricante = dados.get("fabricante") or ""
         if not fabricante and mac_disp:
             try:
-                from utils.identificador import GerenciadorDispositivos
                 fabricante = GerenciadorDispositivos().identificar_fabricante(mac_disp)
             except Exception:
                 fabricante = "---"
@@ -189,7 +186,6 @@ class PainelDetalhes(QFrame):
         apelido = dados.get("apelido") or ""
         if not apelido and mac_disp:
             try:
-                from utils.identificador import GerenciadorDispositivos
                 apelido = GerenciadorDispositivos().obter_apelido(mac_disp)
             except Exception:
                 apelido = ""
@@ -310,7 +306,7 @@ class VisualizadorTopologia(QWidget):
             else:
                 self._aliases_persistidos.pop(chave, None)
 
-        salvar_aliases(self._arquivo_aliases, self._aliases_persistidos)
+        salvar_aliases(self._aliases_persistidos, self._arquivo_aliases)
 
     def _sincronizar_metadados_dispositivo(self, ip: str):
         if ip not in self.dispositivos:
@@ -1223,7 +1219,6 @@ class PainelTopologia(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._montar_layout()
-        # PASSO 4 — Instanciar o GerenciadorDispositivos
         self.gerenciador = GerenciadorDispositivos()
 
     def _montar_layout(self):
@@ -1283,7 +1278,6 @@ class PainelTopologia(QWidget):
 
     # ── Metodos publicos usados pela janela principal ──────────────────────
 
-    # PASSO 5 — Versões atualizadas de adicionar_dispositivo e adicionar_dispositivo_manual
     def adicionar_dispositivo(self, ip: str, mac: str = "", hostname: str = ""):
         """
         Registra um dispositivo observado via captura passiva (sniffer).
@@ -1318,7 +1312,6 @@ class PainelTopologia(QWidget):
             self.visualizador.dispositivos[ip]["fabricante"] = fabricante
             self.visualizador.dispositivos[ip]["apelido"]    = apelido
 
-    # PASSO 6 — Novo método público para salvar apelido
     def definir_apelido_dispositivo(self, mac: str, apelido: str):
         """
         Define um apelido personalizado para o dispositivo.

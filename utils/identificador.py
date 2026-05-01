@@ -27,7 +27,7 @@ import time
 import urllib.request
 import urllib.error
 from pathlib import Path
-from typing import Callable, Optional, Dict, Union
+from typing import Callable, Optional, Dict
 
 logger = logging.getLogger(__name__)
 

@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
     QProgressBar
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QFont
 
 
 # ===========================================================================

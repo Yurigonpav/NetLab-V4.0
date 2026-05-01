@@ -142,8 +142,6 @@ NetLab/
 ├── diagnostico.py                 # Script standalone para testar interfaces
 ├── http_parser.c                  # Parser HTTP em C (compilado como .dll/.so)
 ├── netlab_core_lib.c              # Buffer circular e métricas em C
-├── compilar_http_parser.py        # Wrapper de compilação do http_parser
-├── setup_netlab.py                # Wrapper de compilação do netlab_core_lib
 ├── requirements.txt
 │
 ├── interface/
