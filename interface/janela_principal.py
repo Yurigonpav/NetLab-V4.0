@@ -994,6 +994,15 @@ class JanelaPrincipal(QMainWindow):
         except Exception:
             return 24
 
+    def _cidr_por_ip_mascara(self, ip: str, mascara: str) -> str:
+        if not ip or not mascara:
+            return ""
+        try:
+            prefixo = self._mascara_para_prefixo(mascara)
+            return str(ipaddress.ip_network(f"{ip}/{prefixo}", strict=False))
+        except Exception:
+            return ""
+
     def _interfaces_ipv4_windows(self, force: bool = False) -> list:
         if (
             not force
@@ -1219,13 +1228,10 @@ class JanelaPrincipal(QMainWindow):
 
         mascara = self._mapa_interface_mascara.get(desc, "")
         if mascara and '.' in mascara:
-            try:
-                prefixo = self._mascara_para_prefixo(mascara)
-                rede    = ipaddress.ip_network(f"{ip_interface}/{prefixo}", strict=False)
-                self._status(f" CIDR via Scapy mapeamento: {rede}")
-                return str(rede)
-            except Exception:
-                pass
+            cidr = self._cidr_por_ip_mascara(ip_interface, mascara)
+            if cidr:
+                self._status(f" CIDR via mascara da interface: {cidr}")
+                return cidr
 
         cidr = self._detectar_cidr_via_scapy(nome_dispositivo)
         if cidr:
@@ -1997,6 +2003,12 @@ class JanelaPrincipal(QMainWindow):
                 mascara = str(ipaddress.ip_network(cidr, strict=False).netmask)
             except Exception:
                 pass
+
+        if not cidr and ip_local and mascara:
+            cidr = self._cidr_por_ip_mascara(ip_local, mascara)
+            if cidr:
+                self._cidr_captura = cidr
+                self.painel_topologia.definir_rede_local(cidr)
 
         total_local      = self.painel_topologia.total_dispositivos()
         snap             = getattr(self, "_snapshot_atual", {})
