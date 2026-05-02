@@ -1,70 +1,124 @@
 # interface/painel_eventos.py
-# Painel do Modo Análise — v5.0
+# Painel do Modo Análise — v6.0
 #
-# OTIMIZAÇÕES vs versão anterior:
-#   - Filtro via show/hide de itens existentes (O(n)) — sem recriar widgets
-#   - Badges ocultos enquanto count == 0 (não aparecem categorias vazias)
-#   - Debounce de 120ms na busca — sem filtrar a cada keystroke
-#   - Layout com mais respiro: margens e alturas revisadas
-#   - QTextBrowser para HTML rico — sem truncamento de QLabel
-#   - _ao_selecionar corrige mapeamento index↔evento para itens ocultos
+# Redesign completo com foco em:
+#   - Layout totalmente adaptativo (splitter proporcional, sem px fixos)
+#   - Hierarquia visual clara e consistente com o restante do NetLab
+#   - Itens da lista com informação densa mas legível
+#   - Painel de detalhe com seções bem delimitadas e sem truncamento
+#   - Badges em linha separada estável (sem layout shift)
+#   - Todas as funções da versão anterior preservadas e aprimoradas
 
 from collections import defaultdict, deque
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QScrollArea, QFrame, QPushButton,
     QSplitter, QLineEdit, QListWidget, QListWidgetItem,
-    QTextBrowser, QSizePolicy,
+    QTextBrowser, QSizePolicy, QGraphicsOpacityEffect,
 )
-from PyQt6.QtCore import Qt, QSize, QTimer
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import Qt, QSize, QTimer, QPropertyAnimation, QEasingCurve
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QLinearGradient
 
 from utils.rede import corrigir_mojibake
 
-# ─────────────────────────────────────────────────────────────
-# Tokens de design — espelham tema_escuro.qss
-# ─────────────────────────────────────────────────────────────
-_BG      = "#0f1423"
-_SURFACE = "#12162a"
-_CARD    = "#0d1120"
-_BORDA   = "#1e2d40"
-_SEL     = "#1e3a5f"
-_ACCENT  = "#3498DB"
-_TEXTO   = "#ecf0f1"
-_MUTED   = "#7f8c8d"
-_DIM     = "#566573"
+# ══════════════════════════════════════════════════════════════
+# TOKENS DE DESIGN — Sistema de cores do NetLab Educacional
+# ══════════════════════════════════════════════════════════════
 
+_BG       = "#0a0e1a"       # fundo principal — mais profundo
+_BG2      = "#0f1423"       # fundo secundário
+_SURFACE  = "#111827"       # superfícies elevadas
+_SURFACE2 = "#161d2e"       # superfícies secundárias
+_CARD     = "#0d1220"       # cards / containers internos
+_BORDA    = "#1a2540"       # bordas sutis
+_BORDA2   = "#243352"       # bordas de foco/hover
+_SEL      = "#1a3a5c"       # seleção
+_SEL2     = "#1e4571"       # seleção hover
+_ACCENT   = "#3d9fd3"       # azul principal
+_ACCENT2  = "#5ab4e5"       # azul claro
+_TEXTO    = "#dde6f0"       # texto principal
+_TEXTO2   = "#aabdcc"       # texto secundário
+_MUTED    = "#6b7f94"       # texto muted
+_DIM      = "#3d5166"       # texto dim
+_LINHA    = "#131c2e"       # separadores internos
+
+# Cores semânticas de nível
+_CRITICO  = "#e05252"
+_AVISO    = "#d4872a"
+_INFO     = "#3d9fd3"
+_OK       = "#3dba7e"
+
+# Paleta de protocolos
 _PROTO_COR = {
-    "HTTPS":   "#2ECC71",
-    "HTTP":    "#E74C3C",
-    "DNS":     "#3498DB",
-    "ARP":     "#E67E22",
-    "ICMP":    "#1ABC9C",
-    "TCP_SYN": "#9B59B6",
-    "DHCP":    "#16A085",
-    "SSH":     "#2980B9",
-    "FTP":     "#E91E63",
-    "SMB":     "#795548",
-    "RDP":     "#FF5722",
+    "HTTPS":            "#3dba7e",
+    "HTTP":             "#e05252",
+    "DNS":              "#3d9fd3",
+    "ARP":              "#d4872a",
+    "ICMP":             "#2bbfb0",
+    "TCP_SYN":          "#8e6dc4",
+    "DHCP":             "#1d9e87",
+    "SSH":              "#3070b0",
+    "FTP":              "#c94f8a",
+    "SMB":              "#7d6145",
+    "RDP":              "#d4602a",
+    "NOVO_DISPOSITIVO": "#d4a72a",
 }
+
 _PROTO_LABEL = {
     "HTTPS": "HTTPS", "HTTP": "HTTP", "DNS": "DNS",
     "ARP": "ARP", "ICMP": "ICMP", "TCP_SYN": "SYN",
     "DHCP": "DHCP", "SSH": "SSH", "FTP": "FTP",
-    "SMB": "SMB", "RDP": "RDP",
+    "SMB": "SMB", "RDP": "RDP", "NOVO_DISPOSITIVO": "NOVO",
 }
 
+_PROTO_ICONE = {}
+
+_NIVEL_COR = {
+    "CRITICO": _CRITICO,
+    "AVISO":   _AVISO,
+    "INFO":    _INFO,
+}
+
+
 def _cor(tipo):  return _PROTO_COR.get(tipo, _MUTED)
-def _lbl(tipo):  return _PROTO_LABEL.get(tipo, tipo[:4] if tipo else "PKT")
-def _rgb(hex_c): c = QColor(hex_c); return c.red(), c.green(), c.blue()
+def _lbl(tipo):  return _PROTO_LABEL.get(tipo, (tipo[:4] if tipo else "PKT"))
+def _ico(tipo):  return ""
+def _rgb(hex_c):
+    c = QColor(hex_c)
+    return c.red(), c.green(), c.blue()
 
 
-# ─────────────────────────────────────────────────────────────
-# Badge de filtro
-# ─────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# SCROLLBAR STYLE — reutilizado em toda a UI
+# ══════════════════════════════════════════════════════════════
+
+_SCROLL_SS = f"""
+    QScrollBar:vertical {{
+        background: {_BG}; width: 6px;
+        border-radius: 3px; margin: 0;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {_BORDA2}; border-radius: 3px; min-height: 24px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: {_ACCENT};
+    }}
+    QScrollBar::add-line:vertical,
+    QScrollBar::sub-line:vertical {{ height: 0; }}
+    QScrollBar::add-page:vertical,
+    QScrollBar::sub-page:vertical {{ background: none; }}
+"""
+
+
+# ══════════════════════════════════════════════════════════════
+# BADGE DE FILTRO DE PROTOCOLO
+# ══════════════════════════════════════════════════════════════
 
 class _Badge(QPushButton):
-    def __init__(self, proto, parent=None):
+    """Botão de filtro por protocolo com indicador de contagem."""
+
+    def __init__(self, proto: str, parent=None):
         super().__init__(parent)
         self.proto  = proto
         self._count = 0
@@ -72,131 +126,306 @@ class _Badge(QPushButton):
         self.setCheckable(True)
         self.setChecked(self._ativo)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(22)
+        self.setFixedHeight(24)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._sync()
         if proto != "Todos":
             self.hide()
 
-    def set_count(self, n):
+    def set_count(self, n: int):
         self._count = n
         self._sync()
         if self.proto != "Todos":
             self.setVisible(n > 0)
 
-    def set_ativo(self, ativo):
+    def set_ativo(self, ativo: bool):
         self._ativo = ativo
         self.setChecked(ativo)
         self._sync()
 
     def _sync(self):
         label = _lbl(self.proto) if self.proto != "Todos" else "Todos"
-        self.setText(f"{label}  {self._count}" if self._count else label)
+        count_txt = f" {self._count}" if self._count > 0 else ""
+        self.setText(f"{label}{count_txt}")
+
         cor = _cor(self.proto) if self.proto != "Todos" else _ACCENT
+        r, g, b = _rgb(cor)
+
         if self._ativo:
             self.setStyleSheet(f"""
                 QPushButton {{
-                    background:{_SEL}; color:{cor};
-                    border:1px solid {cor}; border-radius:4px;
-                    padding:1px 11px; font-size:10px;
-                    font-weight:bold; font-family:Consolas;
+                    background: rgba({r},{g},{b}, 22);
+                    color: {cor};
+                    border: 1px solid rgba({r},{g},{b}, 80);
+                    border-radius: 5px;
+                    padding: 2px 12px;
+                    font-size: 10px;
+                    font-weight: bold;
+                    font-family: Consolas, monospace;
+                    letter-spacing: 0.5px;
                 }}
             """)
         else:
             self.setStyleSheet(f"""
                 QPushButton {{
-                    background:transparent; color:{_MUTED};
-                    border:1px solid transparent; border-radius:4px;
-                    padding:1px 11px; font-size:10px; font-family:Consolas;
+                    background: transparent;
+                    color: {_MUTED};
+                    border: 1px solid {_BORDA};
+                    border-radius: 5px;
+                    padding: 2px 12px;
+                    font-size: 10px;
+                    font-family: Consolas, monospace;
+                    letter-spacing: 0.5px;
                 }}
-                QPushButton:hover {{ color:{_TEXTO}; background:{_BORDA}; }}
+                QPushButton:hover {{
+                    color: {_TEXTO2};
+                    background: rgba(255,255,255, 5);
+                    border-color: {_BORDA2};
+                }}
             """)
 
 
-# ─────────────────────────────────────────────────────────────
-# Widget de item da lista
-# ─────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# ITEM DA LISTA DE EVENTOS
+# ══════════════════════════════════════════════════════════════
 
 class _ItemWidget(QWidget):
-    def __init__(self, evento, parent=None):
+    """
+    Card compacto para cada evento na lista lateral.
+    Layout:
+      [faixa cor] [icone] [coluna: badge+IPs / info extra] [timestamp]
+    """
+
+    HEIGHT = 68
+
+    def __init__(self, evento: dict, parent=None):
         super().__init__(parent)
         self.evento = evento
+        self.setFixedHeight(self.HEIGHT)
+
         tipo = evento.get("tipo", "")
         cor  = _cor(tipo)
         r, g, b = _rgb(cor)
+        nivel = evento.get("nivel", "INFO")
+        cor_nivel = _NIVEL_COR.get(nivel, _MUTED)
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
+        # Faixa lateral colorida por protocolo
         faixa = QFrame()
-        faixa.setFixedWidth(3)
-        faixa.setStyleSheet(f"background:{cor}; border:none;")
+        faixa.setFixedWidth(4)
+        faixa.setStyleSheet(f"background: {cor}; border: none;")
         root.addWidget(faixa)
 
-        corpo = QWidget()
-        corpo.setStyleSheet("background:transparent;")
-        cl = QVBoxLayout(corpo)
-        cl.setContentsMargins(12, 11, 12, 11)
-        cl.setSpacing(5)
+        # Separador vertical sutil (ajustado sem o ícone)
+        sep = QFrame()
+        sep.setFixedWidth(1)
+        sep.setFixedHeight(36)
+        sep.setStyleSheet(f"background: {_BORDA}; border: none;")
+        root.addWidget(sep)
 
-        # Linha 1: badge + IPs
+        # Coluna central: informações do evento
+        corpo = QWidget()
+        corpo.setStyleSheet("background: transparent;")
+        cl = QVBoxLayout(corpo)
+        cl.setContentsMargins(12, 8, 8, 8)
+        cl.setSpacing(4)
+
+        # Linha 1: badge protocolo + IPs
         r1 = QHBoxLayout()
-        r1.setSpacing(8)
+        r1.setSpacing(6)
+        r1.setContentsMargins(0, 0, 0, 0)
+
         badge = QLabel(_lbl(tipo))
-        badge.setFixedHeight(16)
+        badge.setFixedHeight(17)
         badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setStyleSheet(f"""
-            background:rgba({r},{g},{b},30); color:{cor};
-            border:1px solid rgba({r},{g},{b},70); border-radius:3px;
-            padding:1px 7px; font-family:Consolas;
-            font-size:9px; font-weight:bold;
+            background: rgba({r},{g},{b}, 22);
+            color: {cor};
+            border: 1px solid rgba({r},{g},{b}, 65);
+            border-radius: 3px;
+            padding: 0 8px;
+            font-family: Consolas, monospace;
+            font-size: 9px;
+            font-weight: bold;
+            letter-spacing: 0.5px;
         """)
-        ip_orig = evento.get("ip_origem", "")
-        ip_dest = evento.get("ip_destino", "")
-        lbl_ips = QLabel(f"{ip_orig}  →  {ip_dest}")
-        lbl_ips.setStyleSheet(f"color:{_TEXTO}; font-family:Consolas; font-size:11px;")
+
+        ip_orig = evento.get("ip_origem", "—")
+        ip_dest = evento.get("ip_destino", "—")
+
+        lbl_orig = QLabel(ip_orig)
+        lbl_orig.setStyleSheet(
+            f"color: {_TEXTO}; font-family: Consolas; font-size: 11px; "
+            "font-weight: bold; background: transparent;"
+        )
+
+        lbl_seta = QLabel(">")
+        lbl_seta.setStyleSheet(f"color: {_DIM}; font-size: 11px; background: transparent;")
+        lbl_seta.setFixedWidth(12)
+
+        lbl_dest = QLabel(ip_dest)
+        lbl_dest.setStyleSheet(
+            f"color: {_ACCENT2}; font-family: Consolas; font-size: 11px; "
+            "background: transparent;"
+        )
+
+        # Indicador de nível crítico/aviso
+        if nivel in ("CRITICO", "AVISO"):
+            dot = QLabel("!")
+            dot.setStyleSheet(
+                f"color: {cor_nivel}; font-size: 10px; font-weight: bold; background: transparent;"
+            )
+            r1.addWidget(dot)
+
         r1.addWidget(badge)
-        r1.addWidget(lbl_ips)
+        r1.addWidget(lbl_orig)
+        r1.addWidget(lbl_seta)
+        r1.addWidget(lbl_dest)
         r1.addStretch()
         cl.addLayout(r1)
 
-        # Linha 2: info extra + timestamp
-        r2 = QHBoxLayout()
-        r2.setSpacing(10)
-        sub = (evento.get("dominio") or evento.get("http_caminho")
-               or evento.get("mac_origem")
-               or (f":{evento.get('porta_destino')}" if evento.get("porta_destino") else ""))
+        # Linha 2: info contextual (domínio, caminho, mac, porta)
+        sub = (
+            evento.get("dominio")
+            or evento.get("http_caminho")
+            or evento.get("mac_origem")
+            or (f"> :{evento.get('porta_destino')}" if evento.get("porta_destino") else "")
+            or ""
+        )
         if sub:
-            ls = QLabel(str(sub)[:40])
-            ls.setStyleSheet(f"color:{_DIM}; font-size:10px;")
-            r2.addWidget(ls)
-        lbl_ts = QLabel(evento.get("timestamp", ""))
-        lbl_ts.setStyleSheet(f"color:{_MUTED}; font-family:Consolas; font-size:10px;")
-        r2.addStretch()
-        r2.addWidget(lbl_ts)
-        cl.addLayout(r2)
+            ls = QLabel(str(sub)[:52])
+            ls.setStyleSheet(
+                f"color: {_MUTED}; font-size: 10px; "
+                "font-family: Consolas; background: transparent;"
+            )
+            ls.setContentsMargins(0, 0, 0, 0)
+            cl.addWidget(ls)
+        else:
+            cl.addStretch()
 
         root.addWidget(corpo, 1)
 
+        # Timestamp alinhado à direita, centralizado verticalmente
+        lbl_ts = QLabel(evento.get("timestamp", ""))
+        lbl_ts.setFixedWidth(54)
+        lbl_ts.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight
+        )
+        lbl_ts.setStyleSheet(
+            f"color: {_DIM}; font-family: Consolas; font-size: 9px; "
+            f"padding-right: 12px; background: transparent;"
+        )
+        root.addWidget(lbl_ts)
 
-# ─────────────────────────────────────────────────────────────
-# Painel principal
-# ─────────────────────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════
+# SEPARADOR DE SEÇÃO
+# ══════════════════════════════════════════════════════════════
+
+class _SecaoHeader(QWidget):
+    """Cabeçalho de seção com linha decorativa."""
+
+    def __init__(self, titulo: str, cor: str = _MUTED, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(28)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+
+        lbl = QLabel(titulo)
+        lbl.setStyleSheet(f"""
+            color: {cor};
+            font-size: 9px;
+            font-weight: bold;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            letter-spacing: 1.5px;
+            background: transparent;
+        """)
+        lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        lay.addWidget(lbl)
+
+        linha = QFrame()
+        linha.setFrameShape(QFrame.Shape.HLine)
+        linha.setStyleSheet(f"background: {_BORDA}; border: none; max-height: 1px;")
+        lay.addWidget(linha, 1)
+
+
+# ══════════════════════════════════════════════════════════════
+# GRID DE METADADOS (tabela chave/valor estilizada)
+# ══════════════════════════════════════════════════════════════
+
+class _MetaGrid(QFrame):
+    """Grade de metadados chave-valor com design limpo."""
+
+    def __init__(self, campos: list, parent=None):
+        """campos: lista de (rotulo, valor, cor_valor_opcional)"""
+        super().__init__(parent)
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: {_CARD};
+                border: 1px solid {_BORDA};
+                border-radius: 8px;
+            }}
+        """)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        for i, campo in enumerate(campos):
+            rot   = campo[0]
+            val   = campo[1]
+            cor_v = campo[2] if len(campo) > 2 else _TEXTO
+
+            linha = QFrame()
+            borda_b = f"border-bottom: 1px solid {_LINHA};" if i < len(campos) - 1 else ""
+            linha.setStyleSheet(f"QFrame {{ {borda_b} background: transparent; }}")
+            ll = QHBoxLayout(linha)
+            ll.setContentsMargins(16, 9, 16, 9)
+            ll.setSpacing(12)
+
+            lr = QLabel(rot)
+            lr.setFixedWidth(120)
+            lr.setStyleSheet(
+                f"color: {_MUTED}; font-size: 10px; background: transparent;"
+            )
+
+            lv = QLabel(str(val))
+            lv.setStyleSheet(
+                f"color: {cor_v}; font-family: Consolas; "
+                f"font-size: 10px; background: transparent;"
+            )
+            lv.setWordWrap(True)
+
+            ll.addWidget(lr)
+            ll.addWidget(lv, 1)
+            lay.addWidget(linha)
+
+
+# ══════════════════════════════════════════════════════════════
+# PAINEL PRINCIPAL — PainelEventos
+# ══════════════════════════════════════════════════════════════
 
 class PainelEventos(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._todos_eventos   = deque(maxlen=150)
-        self._evento_atual    = None
-        self._filtro_proto    = "Todos"
-        self._filtro_texto    = ""
-        self._aba_ativa       = "analise"
-        self._badges          = {}
-        self._contadores      = defaultdict(int)
-        # (evento, QListWidgetItem, _ItemWidget)
-        self._item_map        = []
 
+        # Estado
+        self._todos_eventos  = deque(maxlen=150)
+        self._evento_atual   = None
+        self._filtro_proto   = "Todos"
+        self._filtro_texto   = ""
+        self._aba_ativa      = "analise"
+        self._badges         = {}
+        self._contadores     = defaultdict(int)
+        self._item_map       = []   # (evento, QListWidgetItem, _ItemWidget)
+        self._stats_cache    = {"pacotes": 0, "rede": "—", "dados": "0 B"}
+
+        # Timer debounce para busca
         self._timer_busca = QTimer(self)
         self._timer_busca.setSingleShot(True)
         self._timer_busca.setInterval(120)
@@ -204,226 +433,460 @@ class PainelEventos(QWidget):
 
         self._montar_layout()
 
-    # ── Layout ─────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────
+    # MONTAGEM DO LAYOUT PRINCIPAL
+    # ─────────────────────────────────────────────────────────
 
     def _montar_layout(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+
         root.addWidget(self._mk_topbar())
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(1)
-        splitter.setStyleSheet(f"QSplitter::handle{{background:{_BORDA};}}")
-        splitter.addWidget(self._mk_lista())
-        splitter.addWidget(self._mk_detalhe())
-        splitter.setSizes([310, 900])
-        root.addWidget(splitter, 1)
+
+        # Splitter principal: lista | detalhe
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.setHandleWidth(1)
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.setStyleSheet(f"""
+            QSplitter::handle {{
+                background: {_BORDA};
+            }}
+        """)
+        self._splitter.addWidget(self._mk_painel_lista())
+        self._splitter.addWidget(self._mk_painel_detalhe())
+        self._splitter.setStretchFactor(0, 1)
+        self._splitter.setStretchFactor(1, 3)
+
+        root.addWidget(self._splitter, 1)
         root.addWidget(self._mk_rodape())
 
-    def _mk_topbar(self):
-        bar = QFrame()
-        bar.setFixedHeight(46)
-        bar.setStyleSheet(f"QFrame{{background:{_SURFACE};border-bottom:1px solid {_BORDA};}}")
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(16, 0, 16, 0)
-        lay.setSpacing(10)
+    # ─────────────────────────────────────────────────────────
+    # TOPBAR: título + busca / linha de badges
+    # ─────────────────────────────────────────────────────────
 
-        lbl = QLabel("MODO ANÁLISE")
-        lbl.setStyleSheet(f"color:{_MUTED};font-size:10px;font-weight:bold;letter-spacing:1px;")
-        lay.addWidget(lbl)
+    def _mk_topbar(self) -> QWidget:
+        container = QWidget()
+        container.setStyleSheet(f"background: {_SURFACE};")
+        v = QVBoxLayout(container)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
 
-        sep = QFrame(); sep.setFixedSize(1, 18)
-        sep.setStyleSheet(f"background:{_BORDA};")
-        lay.addWidget(sep)
+        # ── Linha 1: título + campo de busca ─────────────────
+        linha1 = QFrame()
+        linha1.setFixedHeight(48)
+        linha1.setStyleSheet(
+            f"QFrame {{ background: {_SURFACE}; "
+            f"border-bottom: 1px solid {_BORDA}; }}"
+        )
+        l1 = QHBoxLayout(linha1)
+        l1.setContentsMargins(18, 0, 18, 0)
+        l1.setSpacing(14)
 
-        for proto in ("Todos","HTTPS","DNS","ARP","HTTP","ICMP","TCP_SYN",
-                      "DHCP","SSH","FTP","SMB","RDP"):
+        lbl_titulo = QLabel("MODO ANÁLISE")
+        lbl_titulo.setStyleSheet(f"""
+            color: {_TEXTO2};
+            font-size: 11px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+        """)
+        l1.addWidget(lbl_titulo)
+
+        # Separador vertical
+        sep_v = QFrame()
+        sep_v.setFrameShape(QFrame.Shape.VLine)
+        sep_v.setFixedHeight(18)
+        sep_v.setStyleSheet(f"background: {_BORDA}; border: none;")
+        l1.addWidget(sep_v)
+
+        # Contagem global
+        self._lbl_contagem_global = QLabel("0 eventos")
+        self._lbl_contagem_global.setStyleSheet(
+            f"color: {_DIM}; font-family: Consolas; font-size: 10px;"
+        )
+        l1.addWidget(self._lbl_contagem_global)
+
+        l1.addStretch()
+
+        # Campo de busca
+        self._campo_busca = QLineEdit()
+        self._campo_busca.setPlaceholderText("Buscar IP, domínio, protocolo...")
+        self._campo_busca.setMinimumWidth(220)
+        self._campo_busca.setMaximumWidth(320)
+        self._campo_busca.setFixedHeight(30)
+        self._campo_busca.setStyleSheet(f"""
+            QLineEdit {{
+                background: {_CARD};
+                border: 1px solid {_BORDA};
+                border-radius: 6px;
+                color: {_TEXTO};
+                padding: 0 12px;
+                font-size: 11px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }}
+            QLineEdit:focus {{
+                border-color: {_ACCENT};
+                background: {_BG2};
+            }}
+            QLineEdit::placeholder {{
+                color: {_DIM};
+            }}
+        """)
+        self._campo_busca.textChanged.connect(self._ao_busca_mudou)
+        l1.addWidget(self._campo_busca)
+
+        # Botão limpar busca
+        self._btn_limpar_busca = QPushButton("X")
+        self._btn_limpar_busca.setFixedSize(24, 24)
+        self._btn_limpar_busca.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_limpar_busca.setVisible(False)
+        self._btn_limpar_busca.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                color: {_MUTED};
+                border: none;
+                border-radius: 12px;
+                font-size: 10px;
+            }}
+            QPushButton:hover {{
+                background: {_BORDA};
+                color: {_TEXTO};
+            }}
+        """)
+        self._btn_limpar_busca.clicked.connect(self._campo_busca.clear)
+        l1.addWidget(self._btn_limpar_busca)
+
+        v.addWidget(linha1)
+
+        # ── Linha 2: badges de protocolo ─────────────────────
+        linha2 = QFrame()
+        linha2.setFixedHeight(36)
+        linha2.setStyleSheet(
+            f"QFrame {{ background: {_SURFACE2}; "
+            f"border-bottom: 1px solid {_BORDA}; }}"
+        )
+        l2 = QHBoxLayout(linha2)
+        l2.setContentsMargins(18, 0, 18, 0)
+        l2.setSpacing(6)
+
+        protos = [
+            "Todos", "HTTPS", "HTTP", "DNS", "ARP",
+            "ICMP", "TCP_SYN", "DHCP", "SSH", "FTP", "SMB", "RDP",
+        ]
+        for proto in protos:
             b = _Badge(proto)
             b.clicked.connect(lambda _, p=proto: self._ao_badge(p))
             self._badges[proto] = b
-            lay.addWidget(b)
+            l2.addWidget(b)
 
-        lay.addStretch()
+        l2.addStretch()
 
-        self._campo_busca = QLineEdit()
-        self._campo_busca.setPlaceholderText("Buscar IP, domínio...")
-        self._campo_busca.setFixedWidth(210)
-        self._campo_busca.setStyleSheet(f"""
-            QLineEdit{{background:{_CARD};border:1px solid {_BORDA};
-                       border-radius:4px;color:{_TEXTO};padding:4px 10px;font-size:11px;}}
-            QLineEdit:focus{{border-color:{_ACCENT};}}
-        """)
-        self._campo_busca.textChanged.connect(
-            lambda t: (setattr(self, "_filtro_texto", t.lower().strip()),
-                       self._timer_busca.start())
+        # Contagem filtrada
+        self._lbl_contagem = QLabel("0 / 0")
+        self._lbl_contagem.setStyleSheet(
+            f"color: {_DIM}; font-family: Consolas; font-size: 10px;"
         )
-        lay.addWidget(self._campo_busca)
-        return bar
+        l2.addWidget(self._lbl_contagem)
 
-    def _mk_lista(self):
+        v.addWidget(linha2)
+        return container
+
+    # ─────────────────────────────────────────────────────────
+    # PAINEL ESQUERDO: lista de eventos
+    # ─────────────────────────────────────────────────────────
+
+    def _mk_painel_lista(self) -> QWidget:
         frame = QFrame()
-        frame.setStyleSheet(
-            f"QFrame{{background:{_BG};border-right:1px solid {_BORDA};}}")
-        frame.setMinimumWidth(260)
-        frame.setMaximumWidth(360)
+        frame.setMinimumWidth(240)
+        frame.setMaximumWidth(380)
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background: {_BG2};
+                border-right: 1px solid {_BORDA};
+            }}
+        """)
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
-        cab = QFrame(); cab.setFixedHeight(34)
-        cab.setStyleSheet(
-            f"QFrame{{background:{_SURFACE};border-bottom:1px solid {_BORDA};}}")
-        cl = QHBoxLayout(cab); cl.setContentsMargins(14, 0, 14, 0)
-        lbl_h = QLabel("EVENTOS CAPTURADOS")
+        # Cabeçalho da lista
+        cab = QFrame()
+        cab.setFixedHeight(32)
+        cab.setStyleSheet(f"""
+            QFrame {{
+                background: {_SURFACE2};
+                border-bottom: 1px solid {_BORDA};
+            }}
+        """)
+        cl = QHBoxLayout(cab)
+        cl.setContentsMargins(14, 0, 14, 0)
+        lbl_h = QLabel("EVENTOS")
         lbl_h.setStyleSheet(
-            f"color:{_MUTED};font-size:9px;font-weight:bold;letter-spacing:1px;")
-        self._lbl_contagem = QLabel("0 / 0")
-        self._lbl_contagem.setStyleSheet(
-            f"color:{_DIM};font-family:Consolas;font-size:10px;")
-        cl.addWidget(lbl_h); cl.addStretch(); cl.addWidget(self._lbl_contagem)
+            f"color: {_DIM}; font-size: 9px; font-weight: bold; "
+            "letter-spacing: 1.5px;"
+        )
+        cl.addWidget(lbl_h)
+        cl.addStretch()
         lay.addWidget(cab)
 
+        # Lista
         self._lista = QListWidget()
         self._lista.setStyleSheet(f"""
-            QListWidget{{background:{_BG};border:none;outline:none;}}
-            QListWidget::item{{border-bottom:1px solid {_BORDA};padding:0;background:transparent;}}
-            QListWidget::item:selected{{background:{_SEL};}}
-            QListWidget::item:hover:!selected{{background:rgba(30,45,64,0.55);}}
-            QScrollBar:vertical{{background:{_BG};width:8px;border-radius:4px;}}
-            QScrollBar::handle:vertical{{background:#2c3e50;border-radius:4px;min-height:20px;}}
-            QScrollBar::handle:vertical:hover{{background:#3d5166;}}
-            QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{{height:0;}}
+            QListWidget {{
+                background: {_BG2};
+                border: none;
+                outline: none;
+            }}
+            QListWidget::item {{
+                border-bottom: 1px solid {_BORDA};
+                padding: 0;
+                background: transparent;
+            }}
+            QListWidget::item:selected {{
+                background: {_SEL};
+                border-left: 0px;
+            }}
+            QListWidget::item:hover:!selected {{
+                background: rgba(255, 255, 255, 3);
+            }}
+            {_SCROLL_SS}
         """)
         self._lista.setUniformItemSizes(True)
         self._lista.itemSelectionChanged.connect(self._ao_selecionar)
         lay.addWidget(self._lista)
         return frame
 
-    def _mk_detalhe(self):
+    # ─────────────────────────────────────────────────────────
+    # PAINEL DIREITO: detalhe do evento
+    # ─────────────────────────────────────────────────────────
+
+    def _mk_painel_detalhe(self) -> QWidget:
         frame = QFrame()
-        frame.setStyleSheet(f"QFrame{{background:{_BG};}}")
+        frame.setStyleSheet(f"QFrame {{ background: {_BG}; }}")
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        lay.addWidget(self._mk_header())
-        lay.addWidget(self._mk_abas())
 
+        lay.addWidget(self._mk_header_detalhe())
+        lay.addWidget(self._mk_barra_abas())
+
+        # Área de conteúdo scrollável
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet(f"""
-            QScrollArea{{border:none;background:{_BG};}}
-            QScrollBar:vertical{{background:{_BG};width:8px;border-radius:4px;}}
-            QScrollBar::handle:vertical{{background:#2c3e50;border-radius:4px;min-height:20px;}}
-            QScrollBar::handle:vertical:hover{{background:#3d5166;}}
-            QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{{height:0;}}
+            QScrollArea {{ border: none; background: {_BG}; }}
+            {_SCROLL_SS}
         """)
+
         self._conteudo = QWidget()
-        self._conteudo.setStyleSheet(f"background:{_BG};")
+        self._conteudo.setStyleSheet(f"background: {_BG};")
         self._lay_c = QVBoxLayout(self._conteudo)
-        self._lay_c.setContentsMargins(28, 24, 28, 28)
-        self._lay_c.setSpacing(20)
+        self._lay_c.setContentsMargins(24, 20, 24, 28)
+        self._lay_c.setSpacing(16)
         self._lay_c.addStretch()
+
         scroll.setWidget(self._conteudo)
         lay.addWidget(scroll, 1)
         return frame
 
-    def _mk_header(self):
-        frame = QFrame(); frame.setFixedHeight(76)
-        frame.setStyleSheet(
-            f"QFrame{{background:{_CARD};border-bottom:1px solid {_BORDA};}}")
-        lay = QVBoxLayout(frame)
-        lay.setContentsMargins(24, 14, 24, 12); lay.setSpacing(7)
-
-        r1 = QHBoxLayout(); r1.setSpacing(12)
-        self._det_badge = QLabel("—")
-        self._det_badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self._det_badge.setStyleSheet(f"""
-            color:{_MUTED};border:1px solid {_BORDA};border-radius:3px;
-            padding:2px 9px;font-family:Consolas;font-size:10px;font-weight:bold;
+    def _mk_header_detalhe(self) -> QFrame:
+        frame = QFrame()
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background: {_SURFACE};
+                border-bottom: 1px solid {_BORDA};
+            }}
         """)
-        self._det_titulo = QLabel("Selecione um evento")
-        self._det_titulo.setStyleSheet(
-            f"font-size:14px;font-weight:bold;color:{_TEXTO};font-family:Consolas;")
+        frame.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
+        )
+
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(24, 14, 24, 14)
+        lay.setSpacing(6)
+
+        # Linha 1: badge protocolo + título + timestamp
+        r1 = QHBoxLayout()
+        r1.setSpacing(12)
+        r1.setContentsMargins(0, 0, 0, 0)
+
+        self._det_badge = QLabel("—")
+        self._det_badge.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        self._det_badge.setFixedHeight(22)
+        self._det_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._det_badge.setStyleSheet(f"""
+            color: {_MUTED};
+            border: 1px solid {_BORDA};
+            border-radius: 4px;
+            padding: 2px 12px;
+            font-family: Consolas, monospace;
+            font-size: 10px;
+            font-weight: bold;
+        """)
+
+        self._det_titulo = QLabel("Selecione um evento na lista")
+        self._det_titulo.setWordWrap(False)
+        self._det_titulo.setStyleSheet(f"""
+            font-size: 13px;
+            font-weight: bold;
+            color: {_TEXTO};
+            font-family: Consolas, monospace;
+            background: transparent;
+        """)
+        self._det_titulo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+
         self._det_ts = QLabel("")
-        self._det_ts.setStyleSheet(f"color:{_MUTED};font-family:Consolas;font-size:11px;")
+        self._det_ts.setStyleSheet(
+            f"color: {_MUTED}; font-family: Consolas; font-size: 10px; "
+            "background: transparent;"
+        )
+        self._det_ts.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+
         r1.addWidget(self._det_badge)
         r1.addWidget(self._det_titulo, 1)
         r1.addWidget(self._det_ts)
         lay.addLayout(r1)
 
+        # Linha 2: fluxo IP origem → destino + tamanho
         self._det_resumo = QLabel("")
         self._det_resumo.setStyleSheet(
-            f"color:{_MUTED};font-family:Consolas;font-size:11px;")
+            f"color: {_MUTED}; font-family: Consolas; font-size: 10px; "
+            "background: transparent;"
+        )
         lay.addWidget(self._det_resumo)
+
         return frame
 
-    def _mk_abas(self):
-        frame = QFrame(); frame.setFixedHeight(38)
-        frame.setStyleSheet(
-            f"QFrame{{background:{_SURFACE};border-bottom:1px solid {_BORDA};}}")
+    def _mk_barra_abas(self) -> QFrame:
+        frame = QFrame()
+        frame.setFixedHeight(40)
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background: {_SURFACE2};
+                border-bottom: 1px solid {_BORDA};
+            }}
+        """)
         lay = QHBoxLayout(frame)
-        lay.setContentsMargins(24, 0, 24, 0); lay.setSpacing(0)
+        lay.setContentsMargins(20, 0, 20, 0)
+        lay.setSpacing(4)
+
         self._btn_analise    = self._mk_btn_aba("ANÁLISE",    "analise",   True)
         self._btn_evidencias = self._mk_btn_aba("EVIDÊNCIAS", "evidencias")
         self._btn_pratica    = self._mk_btn_aba("NA PRÁTICA", "pratica")
+
         lay.addWidget(self._btn_analise)
         lay.addWidget(self._btn_evidencias)
         lay.addWidget(self._btn_pratica)
         lay.addStretch()
         return frame
 
-    def _mk_btn_aba(self, texto, id_aba, ativo=False):
+    def _mk_btn_aba(self, texto: str, id_aba: str, ativo: bool = False) -> QPushButton:
         btn = QPushButton(texto)
-        btn.setCheckable(True); btn.setChecked(ativo)
-        btn.setFixedHeight(38)
+        btn.setCheckable(True)
+        btn.setChecked(ativo)
+        btn.setFixedHeight(40)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._estilo_aba(btn, ativo)
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._aplicar_estilo_aba(btn, ativo)
         btn.clicked.connect(lambda: self._trocar_aba(id_aba))
         return btn
 
-    def _estilo_aba(self, btn, ativo):
-        cor_txt = _TEXTO if ativo else _MUTED
-        borda_b = _ACCENT if ativo else "transparent"
-        peso    = "bold" if ativo else "normal"
-        hover   = f"QPushButton:hover{{color:{_TEXTO};}}" if not ativo else ""
+    def _aplicar_estilo_aba(self, btn: QPushButton, ativo: bool):
+        cor_txt  = _TEXTO if ativo else _MUTED
+        borda_b  = _ACCENT if ativo else "transparent"
+        bg       = f"rgba(61, 159, 211, 0.08)" if ativo else "transparent"
+        peso     = "bold" if ativo else "normal"
+        hover    = (
+            f"QPushButton:hover {{ color: {_TEXTO2}; background: rgba(255,255,255,3); }}"
+            if not ativo else ""
+        )
         btn.setStyleSheet(f"""
-            QPushButton{{
-                background:transparent;color:{cor_txt};border:none;
-                border-bottom:2px solid {borda_b};border-radius:0;
-                padding:0 16px;font-size:10px;font-weight:{peso};
-                letter-spacing:1px;margin-bottom:-1px;
+            QPushButton {{
+                background: {bg};
+                color: {cor_txt};
+                border: none;
+                border-bottom: 2px solid {borda_b};
+                border-radius: 0;
+                padding: 0 20px;
+                font-size: 10px;
+                font-weight: {peso};
+                letter-spacing: 1px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                margin-bottom: -1px;
             }}
             {hover}
         """)
 
-    def _mk_rodape(self):
-        frame = QFrame(); frame.setFixedHeight(30)
-        frame.setStyleSheet(
-            f"QFrame{{background:{_SURFACE};border-top:1px solid {_BORDA};}}")
-        lay = QHBoxLayout(frame); lay.setContentsMargins(16, 0, 16, 0)
+    # ─────────────────────────────────────────────────────────
+    # RODAPÉ
+    # ─────────────────────────────────────────────────────────
+
+    def _mk_rodape(self) -> QFrame:
+        frame = QFrame()
+        frame.setFixedHeight(28)
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background: {_SURFACE};
+                border-top: 1px solid {_BORDA};
+            }}
+        """)
+        lay = QHBoxLayout(frame)
+        lay.setContentsMargins(18, 0, 18, 0)
+        lay.setSpacing(0)
+
         self._lbl_status = QLabel("Aguardando captura")
-        self._lbl_status.setStyleSheet(f"color:{_MUTED};font-size:10px;")
-        self._lbl_stats  = QLabel("Rede: — | Pacotes: 0 | Dados: 0 B")
+        self._lbl_status.setStyleSheet(
+            f"color: {_MUTED}; font-size: 10px;"
+        )
+
+        self._lbl_stats = QLabel("Rede: — | Pacotes: 0 | Dados: 0 B")
+        self._lbl_stats.setMinimumWidth(0)
+        self._lbl_stats.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        self._lbl_stats.setWordWrap(False)
         self._lbl_stats.setStyleSheet(
-            f"color:{_DIM};font-family:Consolas;font-size:10px;")
-        lay.addWidget(self._lbl_status); lay.addStretch()
+            f"color: {_DIM}; font-family: Consolas; font-size: 10px;"
+        )
+
+        lay.addWidget(self._lbl_status)
+        lay.addStretch()
         lay.addWidget(self._lbl_stats)
         return frame
 
-    # ── Filtros ────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────
+    # FILTROS
+    # ─────────────────────────────────────────────────────────
 
-    def _ao_badge(self, proto):
+    def _ao_busca_mudou(self, texto: str):
+        self._filtro_texto = texto.lower().strip()
+        self._btn_limpar_busca.setVisible(bool(texto))
+        self._timer_busca.start()
+
+    def _ao_badge(self, proto: str):
         self._filtro_proto = proto
         for p, b in self._badges.items():
             b.set_ativo(p == proto)
         self._filtrar()
 
-    def _passa(self, e):
+    def _passa(self, e: dict) -> bool:
         if self._filtro_proto != "Todos" and e.get("tipo", "") != self._filtro_proto:
             return False
         if self._filtro_texto:
-            campo = (f"{e.get('ip_origem','')} {e.get('ip_destino','')} "
-                     f"{e.get('titulo','')} {e.get('dominio','')}").lower()
+            campo = " ".join([
+                e.get("ip_origem", ""),
+                e.get("ip_destino", ""),
+                e.get("titulo", ""),
+                e.get("dominio", ""),
+                e.get("tipo", ""),
+            ]).lower()
             if self._filtro_texto not in campo:
                 return False
         return True
@@ -440,70 +903,105 @@ class PainelEventos(QWidget):
                     visiveis += 1
         finally:
             self._lista.setUpdatesEnabled(True)
-        self._lbl_contagem.setText(f"{visiveis} / {len(self._todos_eventos)}")
 
-    # ── Lista ──────────────────────────────────────────────────
+        total = len(self._todos_eventos)
+        self._lbl_contagem.setText(f"{visiveis} / {total}")
+        self._lbl_contagem_global.setText(
+            f"{total} evento{'s' if total != 1 else ''}"
+        )
 
-    def _inserir_item(self, evento):
+    # ─────────────────────────────────────────────────────────
+    # INSERÇÃO DE ITENS NA LISTA
+    # ─────────────────────────────────────────────────────────
+
+    def _inserir_item(self, evento: dict):
         widget = _ItemWidget(evento)
         item   = QListWidgetItem()
-        item.setSizeHint(QSize(260, 66))
+        item.setSizeHint(QSize(240, _ItemWidget.HEIGHT))
         self._lista.addItem(item)
         self._lista.setItemWidget(item, widget)
         self._item_map.append((evento, item, widget))
         if not self._passa(evento):
             item.setHidden(True)
+        # Auto-scroll para o último item
+        self._lista.scrollToBottom()
 
     def _ao_selecionar(self):
         items = self._lista.selectedItems()
         if not items:
             return
         row = self._lista.row(items[0])
-        # row refere-se à posição no QListWidget (inclui ocultos).
-        # Buscamos o evento pelo índice direto no _item_map.
         if 0 <= row < len(self._item_map):
             self._evento_atual = self._item_map[row][0]
             self._renderizar()
 
-    # ── Detalhe ────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────
+    # RENDERIZAÇÃO DO DETALHE
+    # ─────────────────────────────────────────────────────────
 
-    def _trocar_aba(self, id_aba):
+    def _trocar_aba(self, id_aba: str):
         self._aba_ativa = id_aba
-        for btn, tid in [(self._btn_analise, "analise"),
-                         (self._btn_evidencias, "evidencias"),
-                         (self._btn_pratica, "pratica")]:
+        mapa = [
+            (self._btn_analise,    "analise"),
+            (self._btn_evidencias, "evidencias"),
+            (self._btn_pratica,    "pratica"),
+        ]
+        for btn, tid in mapa:
             ativo = (tid == id_aba)
             btn.setChecked(ativo)
-            self._estilo_aba(btn, ativo)
+            self._aplicar_estilo_aba(btn, ativo)
         self._renderizar()
 
     def _renderizar(self):
         e = self._evento_atual
         if not e:
             return
-        tipo = e.get("tipo", "")
-        cor  = _cor(tipo)
+
+        tipo  = e.get("tipo", "")
+        cor   = _cor(tipo)
+        nivel = e.get("nivel", "INFO")
         r, g, b = _rgb(cor)
 
+        # Atualiza header
         self._det_badge.setText(_lbl(tipo))
         self._det_badge.setStyleSheet(f"""
-            background:rgba({r},{g},{b},28); color:{cor};
-            border:1px solid rgba({r},{g},{b},65); border-radius:3px;
-            padding:2px 9px; font-family:Consolas;
-            font-size:10px; font-weight:bold;
+            background: rgba({r},{g},{b}, 20);
+            color: {cor};
+            border: 1px solid rgba({r},{g},{b}, 60);
+            border-radius: 4px;
+            padding: 2px 12px;
+            font-family: Consolas, monospace;
+            font-size: 10px;
+            font-weight: bold;
         """)
-        titulo = (e.get("dominio") or e.get("titulo")
-                  or f"{e.get('ip_origem','')} → {e.get('ip_destino','')}")
-        if len(str(titulo)) > 64:
-            titulo = str(titulo)[:62] + "…"
+
+        titulo = (
+            e.get("dominio")
+            or e.get("titulo")
+            or f"{e.get('ip_origem', '')} → {e.get('ip_destino', '')}"
+        )
+        if len(str(titulo)) > 72:
+            titulo = str(titulo)[:70] + "…"
         self._det_titulo.setText(str(titulo))
         self._det_ts.setText(e.get("timestamp", ""))
-        resumo = f"{e.get('ip_origem','')}  →  {e.get('ip_destino','')}"
+
+        resumo_parts = []
+        if e.get("ip_origem"):
+            resumo_parts.append(e["ip_origem"])
+        if e.get("ip_destino"):
+            resumo_parts.append(f">  {e['ip_destino']}")
         if e.get("tamanho"):
-            resumo += f"    ·    {e.get('tamanho')} bytes"
-        self._det_resumo.setText(resumo)
+            resumo_parts.append(f"|  {e['tamanho']} bytes")
+        if nivel in ("CRITICO", "AVISO"):
+            cor_n = _NIVEL_COR.get(nivel, _MUTED)
+            resumo_parts.append(f'<span style="color:{cor_n};">! {nivel}</span>')
+
+        self._det_resumo.setText(
+            '   '.join(resumo_parts) if resumo_parts else ""
+        )
         self._lbl_status.setText(
-            f"{tipo} — {e.get('ip_origem','')} → {e.get('ip_destino','')}")
+            f"{tipo}  —  {e.get('ip_origem', '')} → {e.get('ip_destino', '')}"
+        )
 
         # Limpa conteúdo anterior
         while self._lay_c.count() > 1:
@@ -511,6 +1009,7 @@ class PainelEventos(QWidget):
             if it.widget():
                 it.widget().deleteLater()
 
+        # Renderiza a aba ativa
         if self._aba_ativa == "analise":
             self._aba_analise(e)
         elif self._aba_ativa == "evidencias":
@@ -518,207 +1017,347 @@ class PainelEventos(QWidget):
         else:
             self._aba_pratica(e)
 
-    # ── Helpers de renderização ────────────────────────────────
+    # ─────────────────────────────────────────────────────────
+    # HELPERS DE CONTEÚDO
+    # ─────────────────────────────────────────────────────────
 
     _CSS_BASE = f"""
-        body{{font-family:'Segoe UI',Arial,sans-serif;font-size:11px;
-              color:{_TEXTO};line-height:1.7;margin:0;padding:0;}}
-        b{{color:{_TEXTO};}} i{{color:{_MUTED};}}
-        code{{background:rgba(255,255,255,0.07);padding:1px 5px;
-              border-radius:3px;font-family:Consolas;font-size:10px;color:#a8d8ff;}}
-        table{{border-collapse:collapse;width:100%;}}
-        td{{padding:3px 12px 3px 0;vertical-align:top;}}
+        body {{
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 11px;
+            color: {_TEXTO};
+            line-height: 1.75;
+            margin: 0;
+            padding: 0;
+            background: transparent;
+        }}
+        b {{ color: {_TEXTO}; font-weight: bold; }}
+        i {{ color: {_MUTED}; }}
+        code {{
+            background: rgba(255,255,255, 0.07);
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-family: Consolas, monospace;
+            font-size: 10px;
+            color: #a8d8ff;
+        }}
+        table {{ border-collapse: collapse; width: 100%; }}
+        td {{ padding: 4px 14px 4px 0; vertical-align: top; }}
+        a {{ color: {_ACCENT2}; }}
     """
 
-    def _browser(self, html, muted=False):
+    def _browser(self, html: str, altura_min: int = 80, altura_max: int = 500) -> QTextBrowser:
         tb = QTextBrowser()
         tb.setOpenExternalLinks(False)
         tb.setReadOnly(True)
+        tb.setMinimumHeight(altura_min)
+        tb.setMaximumHeight(altura_max)
+        tb.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
         tb.setStyleSheet(f"""
-            QTextBrowser{{
-                background:{_CARD};border:1px solid {_BORDA};
-                border-radius:5px;color:{"" + _MUTED if muted else _TEXTO};
-                font-size:11px;padding:14px;
-                selection-background-color:{_SEL};
+            QTextBrowser {{
+                background: {_CARD};
+                border: 1px solid {_BORDA};
+                border-radius: 8px;
+                color: {_TEXTO};
+                font-size: 11px;
+                padding: 14px 16px;
+                selection-background-color: {_SEL};
             }}
-            QScrollBar:vertical{{background:{_CARD};width:6px;border-radius:3px;}}
-            QScrollBar::handle:vertical{{background:#2c3e50;border-radius:3px;min-height:16px;}}
-            QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{{height:0;}}
+            {_SCROLL_SS}
         """)
         tb.setHtml(html)
-        tb.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         return tb
 
-    def _secao(self, titulo):
-        w = QWidget(); w.setStyleSheet("background:transparent;")
-        lay = QVBoxLayout(w); lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(10)
-        lbl = QLabel(titulo)
-        lbl.setStyleSheet(
-            f"color:{_MUTED};font-size:9px;font-weight:bold;letter-spacing:1px;")
-        lay.addWidget(lbl)
-        return w
+    def _bloco_alerta(self, texto: str, cor: str) -> QLabel:
+        r, g, b = _rgb(cor)
+        lbl = QLabel(texto)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(f"""
+            background: rgba({r},{g},{b}, 14);
+            border: 1px solid rgba({r},{g},{b}, 50);
+            border-left: 3px solid {cor};
+            border-radius: 6px;
+            padding: 10px 14px;
+            font-size: 11px;
+            color: {cor};
+            font-family: 'Segoe UI', Arial, sans-serif;
+        """)
+        return lbl
 
-    # ── Conteúdo das abas ──────────────────────────────────────
+    def _inserir_secao(self, titulo: str, widget: QWidget,
+                       cor: str = _MUTED, pos: int = -1):
+        """Insere uma seção com cabeçalho no layout de conteúdo."""
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(container)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        lay.addWidget(_SecaoHeader(titulo, cor))
+        lay.addWidget(widget)
+        if pos < 0:
+            pos = max(0, self._lay_c.count() - 1)
+        self._lay_c.insertWidget(pos, container)
 
-    def _aba_analise(self, e):
-        s1 = self._secao("O QUE ACONTECEU")
-        s1.layout().addWidget(self._browser(f"""
+    # ─────────────────────────────────────────────────────────
+    # ABAS DE CONTEÚDO
+    # ─────────────────────────────────────────────────────────
+
+    def _aba_analise(self, e: dict):
+        pos = 0
+
+        # Seção 1: O que aconteceu
+        html1 = f"""
             <style>{self._CSS_BASE}</style>
             <body>
-              <div style="border-left:3px solid {_ACCENT};padding:0 0 0 12px;margin:0;">
-                {e.get("nivel1","Análise não disponível.")}
+              <div style="border-left: 3px solid {_ACCENT};
+                          padding: 0 0 0 14px; margin: 0;">
+                {e.get("nivel1", "<i>Análise não disponível.</i>")}
               </div>
             </body>
-        """))
-        self._lay_c.insertWidget(0, s1)
+        """
+        self._inserir_secao("O QUE ACONTECEU", self._browser(html1), _ACCENT, pos)
+        pos += 1
 
-        s2 = self._secao("COMO O PROTOCOLO FUNCIONA")
-        s2.layout().addWidget(self._browser(f"""
-            <style>{self._CSS_BASE.replace(_TEXTO, _MUTED, 1)}</style>
-            <body>{e.get("nivel2","Informação técnica não disponível.")}</body>
-        """, muted=True))
-        self._lay_c.insertWidget(1, s2)
+        # Seção 2: Como o protocolo funciona
+        html2 = f"""
+            <style>{self._CSS_BASE}</style>
+            <body style="color: {_TEXTO2};">
+              {e.get("nivel2", "<i>Informação técnica não disponível.</i>")}
+            </body>
+        """
+        tb2 = self._browser(html2)
+        tb2.setStyleSheet(
+            tb2.styleSheet().replace(f"color: {_TEXTO}", f"color: {_TEXTO2}", 1)
+        )
+        self._inserir_secao("COMO FUNCIONA", tb2, _MUTED, pos)
+        pos += 1
 
+        # Seção 3: Alerta de segurança (se houver)
         alerta = e.get("alerta_seguranca", "")
         nivel  = e.get("nivel", "INFO")
         if alerta:
-            cor_al = "#E74C3C" if nivel == "CRITICO" else "#E67E22"
-            ra, ga, ba = _rgb(cor_al)
-            s3 = self._secao("ALERTA DE SEGURANÇA")
-            lbl = QLabel(f"⚠  {alerta}")
-            lbl.setWordWrap(True)
-            lbl.setStyleSheet(f"""
-                background:rgba({ra},{ga},{ba},16);
-                border:1px solid rgba({ra},{ga},{ba},55);
-                border-left:3px solid {cor_al};border-radius:5px;
-                padding:10px 14px;font-size:11px;color:{cor_al};
-            """)
-            s3.layout().addWidget(lbl)
-            self._lay_c.insertWidget(2, s3)
+            cor_al = _NIVEL_COR.get(nivel, _MUTED)
+            self._inserir_secao(
+                f"ALERTA — {nivel}",
+                self._bloco_alerta(alerta, cor_al),
+                cor_al,
+                pos,
+            )
 
-    def _aba_evidencias(self, e):
-        s1 = self._secao("CAMPOS DO PACOTE")
-        grid = QFrame()
-        grid.setStyleSheet(
-            f"QFrame{{background:{_CARD};border:1px solid {_BORDA};border-radius:5px;}}")
-        gl = QVBoxLayout(grid); gl.setContentsMargins(0,0,0,0); gl.setSpacing(0)
+    def _aba_evidencias(self, e: dict):
+        pos = 0
+
+        # Seção 1: Campos do pacote
+        tipo = e.get("tipo", "")
+        cifrado = "Sim — TLS" if tipo == "HTTPS" else ("Sim — SSH" if tipo == "SSH" else "Não")
+        cor_cifrado = _OK if cifrado.startswith("Sim") else _CRITICO
+
         campos = [
-            ("IP Origem",     e.get("ip_origem",  "—")),
-            ("IP Destino",    e.get("ip_destino", "—")),
-            ("Protocolo",     e.get("protocolo",  e.get("tipo","—"))),
-            ("Porta Destino", str(e.get("porta_destino") or "—")),
-            ("Tamanho",       f"{e.get('tamanho',0)} bytes"),
-            ("Cifrado",       "Sim (TLS)" if e.get("tipo")=="HTTPS" else "Não"),
+            ("IP Origem",     e.get("ip_origem",  "—"),   _TEXTO),
+            ("IP Destino",    e.get("ip_destino", "—"),   _ACCENT2),
+            ("Protocolo",     e.get("protocolo",  e.get("tipo", "—")), _cor(tipo)),
+            ("Porta Destino", str(e.get("porta_destino") or "—"),      _TEXTO2),
+            ("Tamanho",       f"{e.get('tamanho', 0)} bytes",          _TEXTO2),
+            ("Cifrado",       cifrado,                                  cor_cifrado),
         ]
-        for i, (rot, val) in enumerate(campos):
-            sep_b = f"border-bottom:1px solid {_BORDA};" if i < len(campos)-1 else ""
-            linha = QFrame()
-            linha.setStyleSheet(f"QFrame{{{sep_b}background:transparent;}}")
-            ll = QHBoxLayout(linha); ll.setContentsMargins(14,9,14,9)
-            lr = QLabel(rot); lr.setFixedWidth(115)
-            lr.setStyleSheet(f"color:{_MUTED};font-size:10px;")
-            lv = QLabel(str(val))
-            lv.setStyleSheet(f"color:{_TEXTO};font-family:Consolas;font-size:10px;")
-            ll.addWidget(lr); ll.addWidget(lv, 1)
-            gl.addWidget(linha)
-        s1.layout().addWidget(grid)
-        self._lay_c.insertWidget(0, s1)
+        if e.get("dominio"):
+            campos.insert(3, ("Domínio", e["dominio"], _ACCENT2))
+        if e.get("mac_origem"):
+            campos.append(("MAC Origem", e["mac_origem"], _TEXTO2))
 
+        self._inserir_secao("CAMPOS DO PACOTE", _MetaGrid(campos), _MUTED, pos)
+        pos += 1
+
+        # Seção 2: Detalhes técnicos (nivel3)
         n3 = e.get("nivel3", "")
         if n3:
-            s2 = self._secao("DETALHES TÉCNICOS")
-            s2.layout().addWidget(self._browser(f"""
-                <style>{self._CSS_BASE}</style>
-                <body>{n3}</body>
-            """))
-            self._lay_c.insertWidget(1, s2)
+            html3 = f"<style>{self._CSS_BASE}</style><body>{n3}</body>"
+            self._inserir_secao("DETALHES TÉCNICOS", self._browser(html3, 80, 600), _MUTED, pos)
 
-    def _aba_pratica(self, e):
+    def _aba_pratica(self, e: dict):
+        pos = 0
+
         mapa = {
-            "HTTPS":   "Tráfego normal e seguro. O TLS cifra todo o conteúdo — URL, headers e corpo ficam ilegíveis na rede. Analise o SNI para identificar o serviço sem descriptografar.",
-            "HTTP":    "Tráfego em texto puro. URL, cabeçalhos e corpo visíveis para qualquer capturador na mesma rede. Solução: migrar para HTTPS com HSTS.",
-            "DNS":     "Consultas DNS revelam a intenção de navegação. Sem DoH/DoT, qualquer dispositivo na rede pode mapear os domínios acessados.",
-            "ARP":     "Protocolo sem autenticação — vulnerável a ARP Spoofing. Em redes corporativas, ative Dynamic ARP Inspection (DAI) no switch.",
-            "ICMP":    "Diagnóstico de conectividade. O TTL revela saltos e permite estimar o sistema operacional do remetente.",
-            "TCP_SYN": "Início do 3-way handshake TCP. Flood de SYNs sem ACK = ataque SYN Flood, que esgota a tabela de conexões do servidor.",
-            "DHCP":    "Distribuição automática de IPs. Sem autenticação — rogue DHCP server pode distribuir gateway e DNS falsos. Ative DHCP Snooping.",
-            "SSH":     "Acesso remoto completamente cifrado. Prefira autenticação por par de chaves em vez de senha.",
-            "FTP":     "Credenciais e conteúdo em texto puro. Use SFTP (porta 22) ou FTPS como alternativa segura.",
-            "SMB":     "Compartilhamento de arquivos. Desabilite SMBv1 (EternalBlue/WannaCry). Ative SMB Signing.",
-            "RDP":     "Desktop remoto. Acesse somente via VPN, habilite NLA e monitore eventos 4624/4625.",
+            "HTTPS":
+                "Tráfego cifrado e seguro. O TLS protege URL, headers, cookies e corpo — "
+                "ilegíveis para qualquer capturador na rede. Analise o <b>SNI</b> no "
+                "ClientHello para identificar o serviço sem precisar decriptar.",
+            "HTTP":
+                "Tráfego em texto puro. URL, cabeçalhos e corpo visíveis para qualquer "
+                "dispositivo na mesma rede. Solução imediata: migrar para <b>HTTPS</b> com "
+                "certificado válido e ativar <b>HSTS</b> para impedir downgrade.",
+            "DNS":
+                "Consultas DNS revelam intenção de navegação antes da conexão. Sem "
+                "<b>DoH</b> ou <b>DoT</b>, qualquer dispositivo na rede pode mapear todos "
+                "os domínios acessados. Considere ativar DNS criptografado no roteador.",
+            "ARP":
+                "Protocolo sem autenticação — vulnerável a <b>ARP Spoofing</b>. Um atacante "
+                "pode responder com MACs falsos e interceptar todo o tráfego local. Em redes "
+                "corporativas, ative <b>Dynamic ARP Inspection (DAI)</b> no switch.",
+            "ICMP":
+                "Diagnóstico de conectividade. O <b>TTL</b> revela o número de saltos e "
+                "permite estimar o sistema operacional do remetente. O <code>traceroute</code> "
+                "usa ICMP Time Exceeded para mapear o caminho até o destino.",
+            "TCP_SYN":
+                "Início do <b>3-way handshake</b> TCP. Um flood de SYNs sem ACK é o "
+                "ataque <b>SYN Flood</b>, que esgota a tabela de conexões do servidor. "
+                "Mitigação: <b>SYN Cookies</b> e rate limiting por IP.",
+            "DHCP":
+                "Distribuição automática de IPs sem autenticação. Um <b>Rogue DHCP Server</b> "
+                "pode distribuir gateway e DNS falsos, redirecionando todo o tráfego. "
+                "Ative <b>DHCP Snooping</b> no switch para bloquear servidores não autorizados.",
+            "SSH":
+                "Acesso remoto completamente cifrado. Prefira autenticação por <b>par de "
+                "chaves</b> (Ed25519 ou RSA 4096) em vez de senha. Desabilite login root "
+                "direto e considere mover a porta 22 para reduzir ruído de bots.",
+            "FTP":
+                "Protocolo legado sem criptografia. Credenciais e conteúdo dos arquivos "
+                "trafegam em texto puro. Substitua por <b>SFTP</b> (porta 22) ou "
+                "<b>FTPS</b> (TLS explícito na porta 21 ou implícito na 990).",
+            "SMB":
+                "Compartilhamento de arquivos Windows/Samba. Desabilite <b>SMBv1</b> "
+                "(vulnerável ao EternalBlue/WannaCry). Ative <b>SMB Signing</b> para "
+                "prevenir relay attacks. Restrinja o acesso com firewall na porta 445.",
+            "RDP":
+                "Acesso remoto à área de trabalho Windows. Exponha somente via <b>VPN</b>. "
+                "Ative <b>NLA</b> (Network Level Authentication) e <b>MFA</b>. "
+                "Monitore eventos <code>4624</code> (logon) e <code>4625</code> (falha) no Event Viewer.",
+            "NOVO_DISPOSITIVO":
+                "Novo dispositivo detectado na rede local. Verifique o <b>OUI</b> do MAC "
+                "para identificar o fabricante. Em ambientes corporativos, use <b>802.1X</b> "
+                "para autenticar dispositivos antes de conceder acesso à rede.",
         }
-        texto = mapa.get(e.get("tipo",""), "Análise operacional baseada no fluxo detectado.")
-        s1 = self._secao("SIGNIFICADO OPERACIONAL")
-        s1.layout().addWidget(self._browser(f"""
+
+        tipo  = e.get("tipo", "")
+        texto = mapa.get(tipo, "Análise operacional baseada no fluxo detectado.")
+
+        html_op = f"""
             <style>{self._CSS_BASE}</style>
             <body>
-              <div style="border-left:3px solid {_ACCENT};padding:0 0 0 12px;margin:0;">
+              <div style="border-left: 3px solid {_ACCENT};
+                          padding: 0 0 0 14px; margin: 0;">
                 {texto}
               </div>
             </body>
-        """))
-        self._lay_c.insertWidget(0, s1)
+        """
+        self._inserir_secao("SIGNIFICADO OPERACIONAL", self._browser(html_op), _ACCENT, pos)
+        pos += 1
 
+        # Payload bruto (nivel4) — se disponível
         n4 = e.get("nivel4", "")
         if n4:
-            s2 = self._secao("PAYLOAD BRUTO")
-            tb = self._browser(f"""
-                <style>body{{font-family:Consolas;font-size:10px;
-                             color:{_TEXTO};line-height:1.5;margin:0;padding:0;}}</style>
+            html_n4 = f"""
+                <style>
+                  body {{
+                    font-family: Consolas, monospace;
+                    font-size: 10px;
+                    color: {_TEXTO2};
+                    line-height: 1.55;
+                    margin: 0; padding: 0;
+                  }}
+                </style>
                 <body>{n4}</body>
-            """)
-            tb.setStyleSheet(tb.styleSheet().replace(
-                f"background:{_CARD}", "background:#000408", 1))
-            s2.layout().addWidget(tb)
-            self._lay_c.insertWidget(1, s2)
+            """
+            tb_n4 = self._browser(html_n4, 80, 280)
+            tb_n4.setStyleSheet(
+                tb_n4.styleSheet().replace(f"background: {_CARD}", "background: #040810", 1)
+            )
+            self._inserir_secao("PAYLOAD BRUTO", tb_n4, _DIM, pos)
 
-    # ── API pública ────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────
+    # EVENTOS ADAPT. DE REDIMENSIONAMENTO
+    # ─────────────────────────────────────────────────────────
 
-    def adicionar_evento(self, e):
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Margem dinâmica no painel de conteúdo
+        margin = max(14, min(28, self.width() // 50))
+        self._lay_c.setContentsMargins(margin, 18, margin, 24)
+        # Rodapé adaptativo
+        self._atualizar_rodape()
+
+    def _atualizar_rodape(self):
+        p = self._stats_cache.get("pacotes", 0)
+        r = self._stats_cache.get("rede", "—")
+        d = self._stats_cache.get("dados", "0 B")
+        if self.width() < 900:
+            self._lbl_stats.setText(f"Net: {r} | Pkt: {p:,} | {d}")
+        else:
+            self._lbl_stats.setText(f"Rede: {r}  |  Pacotes: {p:,}  |  Dados: {d}")
+
+    # ─────────────────────────────────────────────────────────
+    # API PÚBLICA
+    # ─────────────────────────────────────────────────────────
+
+    def adicionar_evento(self, e: dict):
+        """Recebe um evento do motor pedagógico e o adiciona à lista."""
+        # Corrige encoding
         e["titulo"] = corrigir_mojibake(e.get("titulo", "Evento"))
-        for k in ("nivel1","nivel2","nivel3","nivel4","alerta_seguranca"):
+        for k in ("nivel1", "nivel2", "nivel3", "nivel4", "alerta_seguranca"):
             if k in e:
                 e[k] = corrigir_mojibake(e[k])
 
         self._todos_eventos.append(e)
+
         tipo = e.get("tipo", "OUTRO")
-        self._contadores[tipo] += 1
+        self._contadores[tipo]    += 1
         self._contadores["Todos"] += 1
 
+        # Atualiza badges
         for proto, badge in self._badges.items():
             badge.set_count(self._contadores[proto])
 
         self._inserir_item(e)
 
+        # Atualiza contagem exibida
         visiveis = sum(1 for _, it, _ in self._item_map if not it.isHidden())
-        self._lbl_contagem.setText(f"{visiveis} / {len(self._todos_eventos)}")
+        total    = len(self._todos_eventos)
+        self._lbl_contagem.setText(f"{visiveis} / {total}")
+        self._lbl_contagem_global.setText(
+            f"{total} evento{'s' if total != 1 else ''}"
+        )
 
     def limpar(self):
+        """Reinicia completamente o painel (nova sessão)."""
         self._todos_eventos.clear()
         self._item_map.clear()
         self._lista.clear()
         self._contadores.clear()
         self._evento_atual = None
+
         for b in self._badges.values():
             b.set_count(0)
-        self._det_titulo.setText("Selecione um evento")
+
+        # Reset do header
+        self._det_titulo.setText("Selecione um evento na lista")
         self._det_ts.setText("")
         self._det_resumo.setText("")
         self._det_badge.setText("—")
         self._det_badge.setStyleSheet(f"""
-            color:{_MUTED};border:1px solid {_BORDA};border-radius:3px;
-            padding:2px 9px;font-family:Consolas;font-size:10px;font-weight:bold;
+            color: {_MUTED};
+            border: 1px solid {_BORDA};
+            border-radius: 4px;
+            padding: 2px 12px;
+            font-family: Consolas, monospace;
+            font-size: 10px;
+            font-weight: bold;
         """)
         self._lbl_contagem.setText("0 / 0")
+        self._lbl_contagem_global.setText("0 eventos")
         self._lbl_status.setText("Aguardando captura")
+
+        # Limpa conteúdo do detalhe
         while self._lay_c.count() > 1:
             it = self._lay_c.takeAt(0)
             if it.widget():
                 it.widget().deleteLater()
 
-    def atualizar_stats(self, pacotes, rede, dados):
-        self._lbl_stats.setText(
-            f"Rede: {rede}  |  Pacotes: {pacotes:,}  |  Dados: {dados}")
+    def atualizar_stats(self, pacotes: int, rede: str, dados: str):
+        """Atualiza as estatísticas exibidas no rodapé."""
+        self._stats_cache = {"pacotes": pacotes, "rede": rede, "dados": dados}
+        self._atualizar_rodape()
 
     def _reaplicar_filtros(self):
         """Chamado pela janela principal ao trocar de aba (lazy-load)."""
