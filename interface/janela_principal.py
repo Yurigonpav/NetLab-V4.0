@@ -2573,7 +2573,7 @@ class JanelaPrincipal(QMainWindow):
         QMessageBox.about(
             self,
             "Sobre o NetLab Educacional",
-            "<h2>NetLab Educacional V3.1</h2>"
+            "<h2>NetLab Educacional V4.0</h2>"
             "<p>Plataforma educacional para análise de redes locais com "
             "captura de pacotes em tempo real e explicações didáticas "
             "automatizadas.</p>"

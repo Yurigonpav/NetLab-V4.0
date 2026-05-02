@@ -19,7 +19,7 @@
 #                        fácil de interpretar.
 #
 #   Navegação temporal Barra de controles abaixo do gráfico:
-#                        ⏮ / ◀30s / ◀10s / [⏸ Pausar] / 10s▶ / 30s▶ / ▶▶ Ao Vivo
+#                        |< / <30s / <10s / [|| Pausar] / 10s> / 30s> / >> Ao Vivo
 #                      Em modo "ao_vivo" novos pontos atualizam continuamente.
 #                      Em modo "navegação" o gráfico fica congelado no offset
 #                      escolhido; os buffers continuam sendo preenchidos.
@@ -296,7 +296,7 @@ class PainelTrafego(QWidget):
         Barra compacta (38 px) com navegação temporal e controle de EMA.
 
         Layout:
-          [⏮][◀30s][◀10s][⏸ Pausar][10s▶][30s▶][▶▶ Ao Vivo]  |  label  |  EMA: [slider] valor
+          [|<][<30s][<10s][|| Pausar][10s>][30s>][>> Ao Vivo]  |  label  |  EMA: [slider] valor
         """
         barra = QFrame()
         barra.setFixedHeight(38)
@@ -348,14 +348,14 @@ class PainelTrafego(QWidget):
         hbox.setSpacing(4)
 
         # Botões de navegação
-        self._btn_inicio    = QPushButton("⏮")
-        self._btn_recuar30  = QPushButton("◀30s")
-        self._btn_recuar10  = QPushButton("◀10s")
-        self._btn_pausar    = QPushButton("⏸ Pausar")
+        self._btn_inicio    = QPushButton("|<")
+        self._btn_recuar30  = QPushButton("<30s")
+        self._btn_recuar10  = QPushButton("<10s")
+        self._btn_pausar    = QPushButton("|| Pausar")
         self._btn_pausar.setCheckable(True)
-        self._btn_avancar10 = QPushButton("10s▶")
-        self._btn_avancar30 = QPushButton("30s▶")
-        self._btn_ao_vivo   = QPushButton("▶▶ Ao Vivo")
+        self._btn_avancar10 = QPushButton("10s>")
+        self._btn_avancar30 = QPushButton("30s>")
+        self._btn_ao_vivo   = QPushButton(">> Ao Vivo")
 
         dicas = [
             (self._btn_inicio,    "Ir para o início do histórico"),
@@ -703,7 +703,7 @@ class PainelTrafego(QWidget):
             self._navegar(-self._nav_offset)
 
     def _ao_alternar_pausa(self, pausado: bool):
-        """Slot do botão ⏸ Pausar — chamado pelo toggled(bool)."""
+        """Slot do botão || Pausar — chamado pelo toggled(bool)."""
         if self._bloqueio_sinal:
             return
         if pausado:
