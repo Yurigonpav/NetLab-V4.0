@@ -101,3 +101,90 @@ def corrigir_mojibake(texto: str):
             continue
     return texto
 
+def converter_ip_mascara_para_cidr(ip: str, mascara: str) -> str | None:
+    """Calcula o CIDR (ex: 192.168.1.0/24) a partir de IP e Máscara."""
+    try:
+        import ipaddress
+        if not ip or not mascara or "." not in str(mascara):
+            return None
+        rede = ipaddress.ip_network(f"{ip}/{mascara}", strict=False)
+        return str(rede)
+    except Exception:
+        return None
+
+
+def detectar_cidr_robusto(ip_local: str) -> str | None:
+    """
+    Tenta detectar o CIDR de todas as formas possíveis no Windows.
+    Retorna a string do CIDR (ex: '192.168.1.0/24') ou None.
+    """
+    if not ip_local or ip_local.startswith(("127.", "0.0.0.0")):
+        return None
+
+    import subprocess
+    import re
+    import ipaddress
+
+    # ── 1. PowerShell (Get-NetIPAddress) ──
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             f"(Get-NetIPAddress -IPAddress '{ip_local}' -AddressFamily IPv4 -ErrorAction SilentlyContinue).PrefixLength"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=0x08000000 # CREATE_NO_WINDOW
+        )
+        out = proc.stdout.strip()
+        if out.isdigit():
+            prefix = int(out)
+            return str(ipaddress.ip_network(f"{ip_local}/{prefix}", strict=False))
+    except Exception:
+        pass
+
+    # ── 2. WMI (via PowerShell) ──
+    try:
+        cmd = f"(Get-WmiObject Win32_NetworkAdapterConfiguration | Where-Object {{$_.IPAddress -contains '{ip_local}'}}).IPSubnet[0]"
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
+            capture_output=True, text=True, timeout=5,
+            creationflags=0x08000000
+        )
+        out = proc.stdout.strip()
+        if out and "." in out:
+            return converter_ip_mascara_para_cidr(ip_local, out)
+    except Exception:
+        pass
+
+    # ── 3. psutil (se instalado) ──
+    try:
+        import psutil
+        import socket
+        for iface, addrs in psutil.net_if_addrs().items():
+            for addr in addrs:
+                if addr.family == socket.AF_INET and addr.address == ip_local:
+                    if addr.netmask:
+                        return converter_ip_mascara_para_cidr(ip_local, addr.netmask)
+    except Exception:
+        pass
+
+    # ── 4. ipconfig /all (Parsing manual) ──
+    try:
+        proc = subprocess.run(["ipconfig", "/all"], capture_output=True, text=True, timeout=5, creationflags=0x08000000)
+        out = proc.stdout
+        idx = out.find(ip_local)
+        if idx != -1:
+            trecho = out[max(0, idx-500):idx+500]
+            m = re.search(r"(?:M[aá]scara[^:]*|Subnet\s+Mask)[^:]*:\s*((?:\d+\.){3}\d+)", trecho, re.I)
+            if m:
+                return converter_ip_mascara_para_cidr(ip_local, m.group(1))
+    except Exception:
+        pass
+
+    # ── 5. RFC 1918 (Último recurso útil para IPs privados) ──
+    try:
+        if ipaddress.ip_address(ip_local).is_private:
+            prefixo = ".".join(ip_local.split(".")[:3])
+            return f"{prefixo}.0/24"
+    except Exception:
+        pass
+
+    return None

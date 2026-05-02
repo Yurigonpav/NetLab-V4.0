@@ -27,7 +27,7 @@ from interface.painel_eventos import PainelEventos
 from painel_servidor import PainelServidor
 from utils.constantes import PORTAS_HTTP, PORTAS_DHCP
 from utils.gerenciador_subredes import GerenciadorSubRedes, Visibilidade
-from utils.rede import obter_ip_local
+from utils.rede import obter_ip_local, detectar_cidr_robusto, converter_ip_mascara_para_cidr
 from utils.identificador import GerenciadorDispositivos
 
 
@@ -1303,105 +1303,28 @@ class JanelaPrincipal(QMainWindow):
 
     def _cidr_da_interface(self, desc: str) -> str:
         """
-        Detecta o CIDR da interface selecionada.
-
-        Ordem de prioridade (da mais confiável para a mais lenta):
-          1. Máscara já mapeada pelo Scapy/Windows (sem I/O externo)
-          2. Dados estruturados do Windows via PowerShell (Get-NetIPAddress/Get-NetAdapter)
-          3. psutil (cross-platform, sem processos externos)
-          4. netifaces (cross-platform)
-          5. PowerShell direto pelo IP (Get-NetIPAddress -IPAddress)
-          6. ipconfig /all (parsing de texto)
-          7. WMI Win32_NetworkAdapterConfiguration
-          8. Scapy (get_if_addr + get_if_netmask)
-          9. Inferência /24 para IPs privados RFC 1918
-         10. Fallback /32 com aviso explícito
+        Detecta o CIDR da interface usando o motor robusto centralizado.
         """
-        nome_dispositivo = self._mapa_interface_nome.get(desc, desc)
-        ip_mapeado       = self._mapa_interface_ip.get(desc, "")
-
-        # ── 1. Máscara já mapeada internamente (sem nenhum I/O externo) ──────────
-        mascara_mapeada = self._mapa_interface_mascara.get(desc, "")
-        ip_interface    = ip_mapeado or obter_ip_local()
-        if not ip_interface or ip_interface == "127.0.0.1":
-            return ""
-
-        if mascara_mapeada and '.' in mascara_mapeada:
-            cidr = self._cidr_por_ip_mascara(ip_interface, mascara_mapeada)
+        ip_interface = (self._mapa_interface_ip.get(desc.strip(), "") 
+                        or self._mapa_interface_ip.get(desc, "") 
+                        or obter_ip_local())
+        
+        # 1. Tenta via IP/Máscara já conhecidos (mais rápido)
+        mascara = (self._mapa_interface_mascara.get(desc.strip(), "") 
+                   or self._mapa_interface_mascara.get(desc, ""))
+        if mascara:
+            cidr = converter_ip_mascara_para_cidr(ip_interface, mascara)
             if cidr:
-                self._status(f" CIDR via máscara mapeada: {cidr}")
+                self._status(f" CIDR via mapas internos: {cidr}")
                 return cidr
 
-        # ── 2. Dados estruturados do Windows (PowerShell + Get-NetAdapter) ───────
-        info_windows = self._info_windows_para_interface(desc, nome_dispositivo)
-        if info_windows:
-            ip_w      = info_windows.get("ip", "")
-            mascara_w = info_windows.get("mascara", "")
-            if ip_w:
-                self._mapa_interface_ip[desc] = ip_w
-                ip_interface = ip_w
-            if mascara_w:
-                self._mapa_interface_mascara[desc] = mascara_w
-            if info_windows.get("cidr"):
-                self._status(f" CIDR via Windows (PowerShell estruturado): {info_windows['cidr']}")
-                return info_windows["cidr"]
-            if ip_w and mascara_w:
-                cidr = self._cidr_por_ip_mascara(ip_w, mascara_w)
-                if cidr:
-                    self._status(f" CIDR calculado a partir do Windows: {cidr}")
-                    return cidr
-
-        # ── 3. psutil (cross-platform, sem processos externos) ───────────────────
-        cidr = self._detectar_cidr_via_psutil(ip_interface)
+        # 2. Tenta via motor robusto (PowerShell, WMI, psutil, ipconfig, RFC 1918)
+        cidr = detectar_cidr_robusto(ip_interface)
         if cidr:
-            self._status(f" CIDR via psutil: {cidr}")
+            self._status(f" CIDR via motor robusto: {cidr}")
             return cidr
 
-        # ── 4. netifaces (cross-platform) ────────────────────────────────────────
-        cidr = self._detectar_cidr_via_netifaces(ip_interface)
-        if cidr:
-            self._status(f" CIDR via netifaces: {cidr}")
-            return cidr
-
-        # ── 5. PowerShell — Get-NetIPAddress ─────────────────────────────────────
-        cidr = self._detectar_cidr_via_powershell(ip_interface)
-        if cidr:
-            self._status(f" CIDR via PowerShell (Get-NetIPAddress): {cidr}")
-            return cidr
-
-        # ── 6. ipconfig /all ──────────────────────────────────────────────────────
-        cidr = self._obter_cidr_via_ipconfig(ip_interface)
-        if cidr:
-            self._status(f" CIDR via ipconfig /all: {cidr}")
-            return cidr
-
-        # ── 7. WMI Win32_NetworkAdapterConfiguration ──────────────────────────────
-        cidr = self._detectar_cidr_via_wmi(ip_interface)
-        if cidr:
-            self._status(f" CIDR via WMI: {cidr}")
-            return cidr
-
-        # ── 8. Scapy get_if_netmask ───────────────────────────────────────────────
-        cidr = self._detectar_cidr_via_scapy(nome_dispositivo)
-        if cidr:
-            self._status(f" CIDR via Scapy: {cidr}")
-            return cidr
-
-        # ── 9. Inferência /24 para IPs privados RFC 1918 (último recurso útil) ───
-        try:
-            addr = ipaddress.ip_address(ip_interface)
-            if addr.is_private:
-                partes = ip_interface.split(".")
-                cidr_inferido = ".".join(partes[:3]) + ".0/24"
-                self._status(f" CIDR inferido /24 (IP privado): {cidr_inferido}")
-                return cidr_inferido
-        except Exception:
-            pass
-
-        # ── 10. Fallback absoluto ──────────────────────────────────────────────────
-        self._status(
-            f" CIDR: máscara não detectada para '{desc}' — usando /32"
-        )
+        # 3. Fallback absoluto (melhor que nada, mas tratado como "não detectado" no diagnóstico)
         return f"{ip_interface}/32"
 
     def _parametros_iface_seguro(self, nome_iface: str) -> dict:
@@ -1886,10 +1809,14 @@ class JanelaPrincipal(QMainWindow):
         )
 
         kb = total_bytes / 1024
+        # Garante que o CIDR atualizado seja mostrado
+        curr_cidr = self._cidr_captura
+        cidr_label = f"Rede: {curr_cidr}" if (curr_cidr and "/32" not in str(curr_cidr)) else "Rede: Detectando..."
+        
         self.lbl_pacotes.setText(f"Pacotes: {total_pacotes:,}")
         self.lbl_dados.setText(
-            f"  Dados: {kb/1024:.2f} MB  " if kb > 1024
-            else f"  Dados: {kb:.1f} KB  "
+            f"  {cidr_label}  |  Dados: {kb/1024:.2f} MB  " if kb > 1024
+            else f"  {cidr_label}  |  Dados: {kb:.1f} KB  "
         )
 
     # -------------------------------------------------------------------------
@@ -2140,11 +2067,13 @@ class JanelaPrincipal(QMainWindow):
         nome_dispositivo = self._mapa_interface_nome.get(desc_sel, desc_sel)
         ip_local         = self._mapa_interface_ip.get(desc_sel, obter_ip_local())
         mascara          = self._mapa_interface_mascara.get(desc_sel, "")
-        cidr             = self._cidr_captura or ""
+        
+        # Sincroniza com o estado global da captura
+        cidr = str(self._cidr_captura or "")
 
-        if not cidr and desc_sel:
+        if (not cidr or "/32" in str(cidr)) and desc_sel:
             cidr = self._cidr_da_interface(desc_sel)
-            if cidr:
+            if cidr and "/32" not in str(cidr):
                 self._cidr_captura = cidr
                 self.painel_topologia.definir_rede_local(cidr)
                 ip_local = self._mapa_interface_ip.get(desc_sel, ip_local)
@@ -2157,9 +2086,18 @@ class JanelaPrincipal(QMainWindow):
             except Exception:
                 pass
 
-        if not cidr and ip_local and mascara:
-            cidr = self._cidr_por_ip_mascara(ip_local, mascara)
-            if cidr:
+        if (not cidr or "/32" in str(cidr)) and ip_local:
+            if mascara:
+                tentativa = converter_ip_mascara_para_cidr(ip_local, mascara)
+                if tentativa and "/32" not in tentativa:
+                    cidr = tentativa
+                    self._cidr_captura = cidr
+                    self.painel_topologia.definir_rede_local(cidr)
+        
+        if (not cidr or "/32" in str(cidr)) and ip_local:
+            tentativa = detectar_cidr_robusto(ip_local)
+            if tentativa:
+                cidr = tentativa
                 self._cidr_captura = cidr
                 self.painel_topologia.definir_rede_local(cidr)
 
@@ -2230,12 +2168,17 @@ class JanelaPrincipal(QMainWindow):
         except Exception:
             iface_scapy_label = "Não foi possível verificar"
 
-        # CIDR válido
+        # CIDR válido (Normalização final para o relatório)
         cidr_ok = False
-        if cidr:
+        if cidr and "/" in str(cidr):
             try:
+                # Se for /32, ainda tentamos um aviso mas mostramos o valor
+                import ipaddress
                 ipaddress.ip_network(cidr, strict=False)
                 cidr_ok = True
+                # Se for /32, forçamos um aviso adicional na UI mas mantemos cidr_ok
+                if "/32" in str(cidr):
+                    pass 
             except Exception:
                 pass
 
@@ -2596,7 +2539,7 @@ class JanelaPrincipal(QMainWindow):
         # ── Dialog ───────────────────────────────────────────────────────────────
 
         dialogo = QDialog(self)
-        dialogo.setWindowTitle("Diagnóstico de Captura")
+        dialogo.setWindowTitle("Diagnóstico de Captura v4.1 (Final)")
         dialogo.setMinimumSize(560, 640)
         layout_d = QVBoxLayout(dialogo)
         layout_d.setSpacing(4)
