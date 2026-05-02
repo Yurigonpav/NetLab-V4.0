@@ -14,17 +14,19 @@
 #   - Status de confiança CONFIRMADO (ARP) vs OBSERVADO (sniffer) (FIX-B)
 #   - registrar_conexao não cria nós implicitamente (FIX-C)
 #   - Integração com GerenciadorDispositivos para fabricante/apelido
+#
 
 import math
 import time
 import threading
 import ipaddress
+import ctypes
 from typing import Dict, Optional, Tuple
 from collections import defaultdict
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QFrame, QPushButton, QInputDialog
+    QFrame, QPushButton, QInputDialog, QDialog
 )
 from PyQt6.QtCore import Qt, QPointF, QTimer, QRectF, QPoint
 from PyQt6.QtGui import (
@@ -218,9 +220,6 @@ class VisualizadorTopologia(QWidget):
     RAIO_MIN        = 7
     RAIO_MAX        = 30
     MAX_DISPOSITIVOS = 50
-    # Limite máximo de pares de conexão armazenados.
-    # Sem limite, este dicionário cresce indefinidamente durante a sessão
-    # e o repaint de _pintar_conexoes (que ordena tudo) fica cada vez mais pesado.
     MAX_CONEXOES_ARMAZENADAS = 300
     TIMEOUT_INATIVIDADE = 1800
 
@@ -255,15 +254,12 @@ class VisualizadorTopologia(QWidget):
         self.on_no_clicado = None
 
         self._fase_animacao = 0
-        # Cache da lista de conexões ordenada — re-ordenar 300 pares a cada
-        # 8ms seria desnecessário. A lista só é reconstruída quando o dicionário
-        # de conexões sofre alteração (flag _cache_conexoes_invalido).
         self._cache_conexoes_ordenadas: list = []
         self._cache_conexoes_invalido:  bool = True
 
         self._timer_animacao = QTimer(self)
         self._timer_animacao.timeout.connect(self._passo_animacao)
-        self._timer_animacao.start(33)  # alvo 30fps (original)
+        self._timer_animacao.start(33)
 
         self._timer_layout = QTimer(self)
         self._timer_layout.setSingleShot(True)
@@ -278,8 +274,6 @@ class VisualizadorTopologia(QWidget):
         self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         self.setMinimumSize(500, 350)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
-
-    # ── Interface publica ──────────────────────────────────────────────────
 
     def _mac_e_valido(self, mac: str) -> bool:
         if not mac or mac.lower() in self._MACS_INVALIDOS:
@@ -343,7 +337,6 @@ class VisualizadorTopologia(QWidget):
     def _definir_alias_dispositivo(self, ip: str, alias: str):
         if ip not in self.dispositivos or ip == "internet":
             return
-
         self.dispositivos[ip]["alias"] = (alias or "").strip()
         self._persistir_alias_dispositivo(ip)
 
@@ -353,12 +346,13 @@ class VisualizadorTopologia(QWidget):
             return
 
         if not self._mac_e_valido(mac):
-            chave = ip if (ip in self._subrede_por_ip or self._pertence_rede(ip)) else "internet"
-            with self._lock_dispositivos:
-                if chave in self.dispositivos:
-                    self.dispositivos[chave]["pacotes"] += 1
-                    self._ultimo_trafego[chave] = time.time()
-            return
+            chave = self._resolver_chave_no(ip, cidr)
+            if chave != "internet":
+                with self._lock_dispositivos:
+                    if chave in self.dispositivos:
+                        self.dispositivos[chave]["pacotes"] += 1
+                        self._ultimo_trafego[chave] = time.time()
+                return
 
         chave = self._resolver_chave_no(ip, cidr)
         agora = time.time()
@@ -404,10 +398,7 @@ class VisualizadorTopologia(QWidget):
                 ]
                 if not candidatos_remocao:
                     return
-                menos_ativo = min(
-                    candidatos_remocao,
-                    key=lambda k: self.dispositivos[k]["pacotes"]
-                )
+                menos_ativo = min(candidatos_remocao, key=lambda k: self.dispositivos[k]["pacotes"])
                 del self.dispositivos[menos_ativo]
                 self._posicoes_mundo.pop(menos_ativo, None)
                 self._ultimo_trafego.pop(menos_ativo, None)
@@ -423,7 +414,6 @@ class VisualizadorTopologia(QWidget):
                 "subrede":   cidr or self._subrede_por_ip.get(ip, ""),
             }
             self._sincronizar_metadados_dispositivo(chave)
-
             if not self._timer_layout.isActive():
                 self._timer_layout.start()
 
@@ -434,25 +424,32 @@ class VisualizadorTopologia(QWidget):
 
         no_a = self._resolver_chave_no(ip_origem)
         no_b = self._resolver_chave_no(ip_destino)
-
         if no_a == no_b:
             return
 
         with self._lock_dispositivos:
+            for no in (no_a, no_b):
+                if no == "internet" and no not in self.dispositivos:
+                    self.dispositivos[no] = {
+                        "ip":         no,
+                        "mac":        "",
+                        "hostname":   "Internet",
+                        "pacotes":    0,
+                        "portas":     set(),
+                        "confianca":  "CONFIRMADO",
+                    }
+                    self._sincronizar_metadados_dispositivo(no)
+            
             if no_a not in self.dispositivos or no_b not in self.dispositivos:
                 return
 
         chave = tuple(sorted([no_a, no_b]))
-
-        # Evita crescimento ilimitado: remove o par menos frequente quando
-        # o dicionário atinge o limite. O par mais raro tem menos relevância visual.
         if chave not in self.contagem_conexoes and \
                 len(self.contagem_conexoes) >= self.MAX_CONEXOES_ARMAZENADAS:
             par_mais_raro = min(self.contagem_conexoes, key=self.contagem_conexoes.get)
             del self.contagem_conexoes[par_mais_raro]
 
         self.contagem_conexoes[chave] += 1
-        # Invalida o cache — a ordem por frequência mudou
         self._cache_conexoes_invalido = True
 
         with self._lock_dispositivos:
@@ -461,8 +458,7 @@ class VisualizadorTopologia(QWidget):
             if porta_origem and no_a in self.dispositivos:
                 self.dispositivos[no_a].setdefault("portas", set()).add(porta_origem)
 
-    def adicionar_dispositivo_manual(self, ip: str, mac: str = "",
-                                     hostname: str = ""):
+    def adicionar_dispositivo_manual(self, ip: str, mac: str = "", hostname: str = ""):
         self.registrar_origem(ip, mac, hostname, confirmado_por_arp=True)
 
     def atualizar_subredes(self, lista_subredes):
@@ -533,34 +529,20 @@ class VisualizadorTopologia(QWidget):
         info_subrede.get("hosts", set()).discard(ip)
 
     def adicionar_dispositivo_com_subrede(
-        self,
-        ip: str,
-        mac: str,
-        cidr: str,
-        local: bool,
-        hostname: str = "",
-        confirmado_por_arp: bool = False,
+        self, ip: str, mac: str, cidr: str, local: bool,
+        hostname: str = "", confirmado_por_arp: bool = False,
     ):
         info_subrede = self.subredes.setdefault(
             cidr,
             {
-                "cidr": cidr,
-                "gateway": "",
-                "visibilidade": "parcial",
-                "hosts": set(),
-                "local": local,
+                "cidr": cidr, "gateway": "", "visibilidade": "parcial",
+                "hosts": set(), "local": local,
             },
         )
         info_subrede["local"] = bool(info_subrede.get("local")) or local
         info_subrede.setdefault("hosts", set()).add(ip)
         self._subrede_por_ip[ip] = cidr
-        self.registrar_origem(
-            ip,
-            mac,
-            hostname,
-            confirmado_por_arp=confirmado_por_arp,
-            cidr=cidr,
-        )
+        self.registrar_origem(ip, mac, hostname, confirmado_por_arp=confirmado_por_arp, cidr=cidr)
 
     def limpar(self):
         self.dispositivos.clear()
@@ -571,12 +553,9 @@ class VisualizadorTopologia(QWidget):
         self._ultimo_trafego.clear()
         self._no_selecionado = None
         self._no_hover = None
-        # Reseta o cache junto com o dicionário
         self._cache_conexoes_ordenadas = []
         self._cache_conexoes_invalido  = True
         self.update()
-
-    # ── Gerenciamento de dispositivos (expiração e limite prático) ────────
 
     def _obter_dispositivos_locais(self) -> list:
         return [k for k in self.dispositivos if k != "internet"]
@@ -598,26 +577,19 @@ class VisualizadorTopologia(QWidget):
         agora = time.time()
         inativos = [
             ip for ip, ts in self._ultimo_trafego.items()
-            if (
-                ip != "internet"
-                and (agora - ts) > self.TIMEOUT_INATIVIDADE
-                and self.dispositivos.get(ip, {}).get("confianca") == "OBSERVADO"
-            )
+            if (ip != "internet" and (agora - ts) > self.TIMEOUT_INATIVIDADE
+                and self.dispositivos.get(ip, {}).get("confianca") == "OBSERVADO")
         ]
         if not inativos:
             return
-
         for ip in inativos:
             if ip in self.dispositivos:
                 del self.dispositivos[ip]
             self._posicoes_mundo.pop(ip, None)
             del self._ultimo_trafego[ip]
             self._remover_ip_de_subredes(ip)
-
         if not self._timer_layout.isActive():
             self._timer_layout.start()
-
-    # ── Zoom / Pan ─────────────────────────────────────────────────────────
 
     def wheelEvent(self, evento):
         fator = 1.12 if evento.angleDelta().y() > 0 else 1 / 1.12
@@ -655,10 +627,7 @@ class VisualizadorTopologia(QWidget):
             ip = self._no_em(pos)
             if ip != self._no_hover:
                 self._no_hover = ip
-                self.setCursor(
-                    QCursor(Qt.CursorShape.PointingHandCursor)
-                    if ip else QCursor(Qt.CursorShape.ArrowCursor)
-                )
+                self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor) if ip else QCursor(Qt.CursorShape.ArrowCursor))
                 self.update()
 
     def mouseReleaseEvent(self, evento):
@@ -668,23 +637,16 @@ class VisualizadorTopologia(QWidget):
         ip = self._no_em(evento.position())
         if not ip or ip == "internet" or ip not in self.dispositivos:
             return
-
         alias_atual = self.dispositivos[ip].get("alias", "")
         novo_alias, confirmou = QInputDialog.getText(
-            self,
-            "Apelido do dispositivo",
-            f"Definir um apelido para {ip}:",
-            text=alias_atual,
+            self, "Apelido do dispositivo", f"Definir um apelido para {ip}:", text=alias_atual,
         )
-        if not confirmou:
-            return
-
-        self._definir_alias_dispositivo(ip, novo_alias)
-        self._sincronizar_metadados_dispositivo(ip)
-        self._no_selecionado = ip
-        if self.on_no_clicado:
-            self.on_no_clicado(ip)
-        self.update()
+        if confirmou:
+            self._definir_alias_dispositivo(ip, novo_alias)
+            self._sincronizar_metadados_dispositivo(ip)
+            self._no_selecionado = ip
+            if self.on_no_clicado: self.on_no_clicado(ip)
+            self.update()
 
     def _resetar_vista(self):
         self._zoom   = 1.0
@@ -694,11 +656,9 @@ class VisualizadorTopologia(QWidget):
 
     def definir_rede_local(self, cidr: str):
         try:
-            import ipaddress
             self._rede_local = ipaddress.ip_network(cidr, strict=False) if cidr else None
         except Exception:
             self._rede_local = None
-
         for info_subrede in self.subredes.values():
             info_subrede["local"] = False
         if cidr and cidr in self.subredes:
@@ -707,33 +667,26 @@ class VisualizadorTopologia(QWidget):
     def _pertence_rede(self, ip: str) -> bool:
         if not ip or not eh_endereco_valido(ip):
             return False
-
         if self._rede_local is not None:
             try:
                 return ipaddress.ip_address(ip) in self._rede_local
             except Exception:
                 return False
-
         return ip == self._ip_local
-
-    # ── Desenho ────────────────────────────────────────────────────────────
 
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.fillRect(self.rect(), self.COR_FUNDO)
-
         if not self.dispositivos:
             self._pintar_vazio(p)
             return
-
         p.save()
         p.translate(self._offset)
         p.scale(self._zoom, self._zoom)
         self._pintar_conexoes(p)
         self._pintar_nos(p)
         p.restore()
-
         self._pintar_legenda(p)
         self._pintar_info(p)
         self._pintar_tooltip(p)
@@ -742,311 +695,125 @@ class VisualizadorTopologia(QWidget):
     def _pintar_vazio(self, p: QPainter):
         p.setPen(QPen(QColor(80, 100, 130)))
         p.setFont(QFont("Arial", 13))
-        p.drawText(
-            self.rect(), Qt.AlignmentFlag.AlignCenter,
-            "Nenhum dispositivo detectado.\n"
-            "Inicie a captura ou clique em 'Descobrir Rede'."
-        )
+        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Nenhum dispositivo detectado.\nInicie a captura ou clique em 'Descobrir Rede'.")
 
     def _pintar_conexoes(self, p: QPainter):
-        if not self.contagem_conexoes:
-            return
-
-        # Usa o cache — só re-ordena quando _cache_conexoes_invalido for True.
-        # Isso significa que a ordenação acontece quando conexões mudam
-        # (a cada ~400ms), não a cada frame (a cada 8ms).
+        if not self.contagem_conexoes: return
         if self._cache_conexoes_invalido:
-            self._cache_conexoes_ordenadas = sorted(
-                self.contagem_conexoes.items(),
-                key=lambda x: x[1], reverse=True
-            )
+            self._cache_conexoes_ordenadas = sorted(self.contagem_conexoes.items(), key=lambda x: x[1], reverse=True)
             self._cache_conexoes_invalido = False
-
         maximo = self._cache_conexoes_ordenadas[0][1] if self._cache_conexoes_ordenadas else 1
-
         for (no_a, no_b), contagem in self._cache_conexoes_ordenadas:
-            if no_a not in self._posicoes_mundo or no_b not in self._posicoes_mundo:
-                continue
-
+            if no_a not in self._posicoes_mundo or no_b not in self._posicoes_mundo: continue
             proporcao = contagem / maximo
             espessura = 0.8 + proporcao * 3.0
-
             if self._no_selecionado:
                 if self._no_selecionado in (no_a, no_b):
                     alpha = int(160 + proporcao * 95)
-                    cor   = QColor(243, 156, 18, alpha)
+                    cor = QColor(243, 156, 18, alpha)
                     espessura *= 1.8
                 else:
                     cor = QColor(52, 152, 219, 20)
                     espessura *= 0.4
             else:
                 alpha = int(45 + proporcao * 150)
-                cor   = QColor(52, 152, 219, alpha)
-
+                cor = QColor(52, 152, 219, alpha)
             p.setPen(QPen(cor, espessura))
             p.drawLine(self._posicoes_mundo[no_a], self._posicoes_mundo[no_b])
 
     def _estilo_subrede(self, visibilidade: str) -> tuple:
         if visibilidade == "total":
-            return (
-                QColor(46, 204, 113, 200),
-                QColor(46, 204, 113, 24),
-                Qt.PenStyle.SolidLine,
-            )
+            return (QColor(46, 204, 113, 200), QColor(46, 204, 113, 24), Qt.PenStyle.SolidLine)
         if visibilidade == "parcial":
-            return (
-                QColor(241, 196, 15, 200),
-                QColor(241, 196, 15, 24),
-                Qt.PenStyle.SolidLine,
-            )
-        return (
-            QColor(155, 89, 182, 170),
-            QColor(155, 89, 182, 18),
-            Qt.PenStyle.DashLine,
-        )
+            return (QColor(241, 196, 15, 200), QColor(241, 196, 15, 24), Qt.PenStyle.SolidLine)
+        return (QColor(155, 89, 182, 170), QColor(155, 89, 182, 18), Qt.PenStyle.DashLine)
 
     def _texto_subrede(self, info_subrede: dict) -> str:
         texto = info_subrede.get("cidr", "")
         gateway = info_subrede.get("gateway")
         visibilidade = info_subrede.get("visibilidade", "inferida")
-        if gateway:
-            texto += f"  gw: {gateway}"
+        if gateway: texto += f"  gw: {gateway}"
         texto += f"  [{visibilidade}]"
         return texto
 
     def _pintar_subredes(self, p: QPainter):
-        if not self.subredes:
-            return
-
+        if not self.subredes: return
         for _cidr, info_subrede in self.subredes.items():
-            hosts_visiveis = [
-                ip for ip in info_subrede.get("hosts", set())
-                if ip in self.dispositivos and ip in self._posicoes_mundo
-            ]
-            if not hosts_visiveis:
-                continue
-
+            hosts_visiveis = [ip for ip in info_subrede.get("hosts", set()) if ip in self.dispositivos and ip in self._posicoes_mundo]
+            if not hosts_visiveis: continue
             pontos = [self._posicoes_mundo[ip] for ip in hosts_visiveis]
-            xs = [ponto.x() for ponto in pontos]
-            ys = [ponto.y() for ponto in pontos]
+            xs, ys = [p.x() for p in pontos], [p.y() for p in pontos]
             margem = 70
-            retangulo = QRectF(
-                min(xs) - margem,
-                min(ys) - margem,
-                (max(xs) - min(xs)) + margem * 2,
-                (max(ys) - min(ys)) + margem * 2,
-            )
-
-            cor_borda, cor_fundo, estilo_linha = self._estilo_subrede(
-                info_subrede.get("visibilidade", "inferida")
-            )
-            caneta = QPen(cor_borda, 2)
-            caneta.setStyle(estilo_linha)
-            p.setPen(caneta)
-            p.setBrush(QBrush(cor_fundo))
-            p.drawRoundedRect(retangulo, 12, 12)
-
-            p.setPen(QPen(QColor(220, 225, 235)))
-            p.setFont(QFont("Arial", 9, QFont.Weight.Bold))
-            p.drawText(
-                retangulo.adjusted(10, 8, -10, -8),
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-                self._texto_subrede(info_subrede),
-            )
-
-    def _pintar_subredes_sem_hosts(self, p: QPainter):
-        subredes_sem_hosts = [
-            info_subrede
-            for info_subrede in self.subredes.values()
-            if not any(
-                ip in self.dispositivos and ip in self._posicoes_mundo
-                for ip in info_subrede.get("hosts", set())
-            )
-        ]
-        if not subredes_sem_hosts:
-            return
-
-        x = 12
-        y = 12
-        largura = min(320, max(220, self.width() // 3))
-        altura = 34
-
-        for info_subrede in subredes_sem_hosts:
-            cor_borda, cor_fundo, estilo_linha = self._estilo_subrede(
-                info_subrede.get("visibilidade", "inferida")
-            )
-            retangulo = QRectF(x, y, largura, altura)
-
-            caneta = QPen(cor_borda, 1.8)
-            caneta.setStyle(estilo_linha)
-            p.setPen(caneta)
-            p.setBrush(QBrush(cor_fundo))
-            p.drawRoundedRect(retangulo, 8, 8)
-
-            p.setPen(QPen(QColor(220, 225, 235)))
-            p.setFont(QFont("Arial", 8, QFont.Weight.Bold))
-            p.drawText(
-                retangulo.adjusted(10, 0, -10, 0),
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                self._texto_subrede(info_subrede),
-            )
-            y += altura + 8
-
-            if y + altura > self.height() - 110:
-                break
+            ret = QRectF(min(xs)-margem, min(ys)-margem, (max(xs)-min(xs))+margem*2, (max(ys)-min(ys))+margem*2)
+            cor_b, cor_f, est = self._estilo_subrede(info_subrede.get("visibilidade", "inferida"))
+            p.setPen(QPen(cor_b, 2, est)); p.setBrush(QBrush(cor_f))
+            p.drawRoundedRect(ret, 12, 12)
+            p.setPen(QPen(QColor(220, 225, 235))); p.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+            p.drawText(ret.adjusted(10, 8, -10, -8), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, self._texto_subrede(info_subrede))
 
     def _pintar_nos(self, p: QPainter):
         ordem = list(self.dispositivos.keys())
         if self._no_selecionado and self._no_selecionado in ordem:
-            ordem.remove(self._no_selecionado)
-            ordem.append(self._no_selecionado)
-
+            ordem.remove(self._no_selecionado); ordem.append(self._no_selecionado)
         for ip in ordem:
-            if ip not in self._posicoes_mundo:
-                continue
-            dados = self.dispositivos[ip]
-            pos   = self._posicoes_mundo[ip]
-            cor   = self._cor_do_no(ip)
-            raio  = self._raio_do_no(ip)
-
-            desfocado = (
-                self._no_selecionado is not None
-                and ip != self._no_selecionado
-            )
-
-            # Sombra
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(QColor(0, 0, 0, 55)))
+            if ip not in self._posicoes_mundo: continue
+            dados, pos, cor, raio = self.dispositivos[ip], self._posicoes_mundo[ip], self._cor_do_no(ip), self._raio_do_no(ip)
+            desfocado = (self._no_selecionado is not None and ip != self._no_selecionado)
+            p.setPen(Qt.PenStyle.NoPen); p.setBrush(QBrush(QColor(0, 0, 0, 55)))
             p.drawEllipse(QPointF(pos.x() + 2, pos.y() + 3), raio, raio)
-
-            # Pulso no IP local
             if ip == self._ip_local and not desfocado:
                 raio_p = raio + 6 + 3 * math.sin(self._fase_animacao * 0.12)
-                pen_p  = QPen(cor.lighter(170), 1.2)
-                pen_p.setStyle(Qt.PenStyle.DotLine)
-                p.setPen(pen_p)
-                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.setPen(QPen(cor.lighter(170), 1.2, Qt.PenStyle.DotLine)); p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawEllipse(pos, raio_p, raio_p)
-
-            # Borda de selecao / hover
             if ip == self._no_selecionado:
-                p.setPen(QPen(QColor(243, 156, 18), 2.5))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawEllipse(pos, raio + 5, raio + 5)
+                p.setPen(QPen(QColor(243, 156, 18), 2.5)); p.setBrush(Qt.BrushStyle.NoBrush); p.drawEllipse(pos, raio+5, raio+5)
             elif ip == self._no_hover and not desfocado:
-                p.setPen(QPen(cor.lighter(200), 1.8))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawEllipse(pos, raio + 4, raio + 4)
-
-            # Corpo do no com gradiente
-            grad = QRadialGradient(
-                pos.x() - raio * 0.3,
-                pos.y() - raio * 0.3,
-                raio * 1.4
-            )
+                p.setPen(QPen(cor.lighter(200), 1.8)); p.setBrush(Qt.BrushStyle.NoBrush); p.drawEllipse(pos, raio+4, raio+4)
+            grad = QRadialGradient(pos.x() - raio*0.3, pos.y() - raio*0.3, raio*1.4)
             if desfocado:
                 grad.setColorAt(0, QColor(cor.red(), cor.green(), cor.blue(), 70))
                 grad.setColorAt(1, QColor(cor.red(), cor.green(), cor.blue(), 25))
                 p.setPen(QPen(QColor(cor.red(), cor.green(), cor.blue(), 45), 1))
             else:
-                grad.setColorAt(0, cor.lighter(155))
-                grad.setColorAt(1, cor.darker(155))
+                grad.setColorAt(0, cor.lighter(155)); grad.setColorAt(1, cor.darker(155))
                 p.setPen(QPen(cor.lighter(190), 1.5))
-            p.setBrush(QBrush(grad))
-            p.drawEllipse(pos, raio, raio)
-
-            # Label dentro do no
+            p.setBrush(QBrush(grad)); p.drawEllipse(pos, raio, raio)
             if raio >= 11 and not desfocado:
-                if ip == "internet":
-                    label = "WEB"
-                else:
-                    partes = ip.split(".")
-                    label  = f".{partes[-1]}" if len(partes) == 4 else ip
-                font_sz = max(5, min(9, int(raio * 0.55)))
-                p.setPen(QPen(self.COR_TEXTO))
-                p.setFont(QFont("Consolas", font_sz, QFont.Weight.Bold))
-                p.drawText(
-                    QRectF(pos.x() - raio, pos.y() - raio * 0.6,
-                           raio * 2, raio * 1.2),
-                    Qt.AlignmentFlag.AlignCenter, label
-                )
-
-            # Nome abaixo do no
+                label = "WEB" if ip == "internet" else f".{ip.split('.')[-1]}" if "." in ip else ip
+                p.setPen(QPen(self.COR_TEXTO)); p.setFont(QFont("Consolas", max(5, min(9, int(raio*0.55))), QFont.Weight.Bold))
+                p.drawText(QRectF(pos.x()-raio, pos.y()-raio*0.6, raio*2, raio*1.2), Qt.AlignmentFlag.AlignCenter, label)
             if raio >= 16 and not desfocado:
                 nome = "Internet" if ip == "internet" else self._nome_preferencial_dispositivo(dados, ip)
-                if len(nome) > 18:
-                    nome = nome[:16] + "..."
-                p.setPen(QPen(self.COR_LEGENDA))
-                p.setFont(QFont("Arial", 7))
-                p.drawText(
-                    QRectF(pos.x() - 50, pos.y() + raio + 3, 100, 13),
-                    Qt.AlignmentFlag.AlignCenter, nome
-                )
+                if len(nome) > 18: nome = nome[:16] + "..."
+                p.setPen(QPen(self.COR_LEGENDA)); p.setFont(QFont("Arial", 7))
+                p.drawText(QRectF(pos.x()-50, pos.y()+raio+3, 100, 13), Qt.AlignmentFlag.AlignCenter, nome)
 
     def _pintar_legenda(self, p: QPainter):
-        itens = [
-            (self.COR_NO_LOCAL,    "Este computador"),
-            (self.COR_NO_NORMAL,   "Dispositivo local"),
-            (self.COR_NO_GATEWAY,  "Gateway"),
-            (self.COR_NO_INTERNET, "Internet"),
-        ]
+        itens = [(self.COR_NO_LOCAL, "Este computador"), (self.COR_NO_NORMAL, "Dispositivo local"), (self.COR_NO_GATEWAY, "Gateway"), (self.COR_NO_INTERNET, "Internet")]
         x, y = 12, self.height() - 96
         p.setFont(QFont("Arial", 8))
         for cor, rotulo in itens:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(cor))
-            p.drawEllipse(x, y, 10, 10)
-            p.setPen(QPen(self.COR_LEGENDA))
-            p.drawText(x + 15, y + 9, rotulo)
-            y += 18
+            p.setPen(Qt.PenStyle.NoPen); p.setBrush(QBrush(cor)); p.drawEllipse(x, y, 10, 10)
+            p.setPen(QPen(self.COR_LEGENDA)); p.drawText(x+15, y+9, rotulo); y += 18
 
     def _pintar_info(self, p: QPainter):
-        locais   = self.total_dispositivos_nao_internet()
-        conexoes = len(self.contagem_conexoes)
-        zoom_pct = int(self._zoom * 100)
-        texto    = (
-            f"Dispositivos: {locais}   "
-            f"Conexoes: {conexoes}   "
-            f"Zoom: {zoom_pct}%"
-        )
+        texto = f"Dispositivos: {self.total_dispositivos_nao_internet()}   Conexoes: {len(self.contagem_conexoes)}   Zoom: {int(self._zoom*100)}%"
         p.setPen(QPen(QColor(70, 90, 120)))
         p.setFont(QFont("Arial", 8))
-        p.drawText(
-            QRectF(self.width() - 360, 8, 350, 16),
-            Qt.AlignmentFlag.AlignRight, texto
-        )
+        p.drawText(QRectF(self.width()-360, 8, 350, 16), Qt.AlignmentFlag.AlignRight, texto)
 
     def _pintar_tooltip(self, p: QPainter):
-        if not self._no_hover or self._no_hover == self._no_selecionado:
-            return
-
-        ip    = self._no_hover
-        dados = self.dispositivos.get(ip, {})
-        nome  = self._nome_preferencial_dispositivo(dados, ip) if ip != "internet" else ""
-        if ip == "internet":
-            txt = "Internet (IPs externos)"
-        elif nome and nome != ip:
-            txt = f"{ip}  -  {nome}"
-        else:
-            txt = ip
-
-        pos_mundo = self._posicoes_mundo.get(ip)
-        if not pos_mundo:
-            return
-        pos_tela  = self._mundo_para_tela(pos_mundo)
-        raio_tela = self._raio_do_no(ip) * self._zoom
-
-        tx = pos_tela.x() + raio_tela + 8
-        ty = pos_tela.y() - 14
-
-        fm   = QFontMetrics(QFont("Arial", 9))
-        larg = fm.horizontalAdvance(txt) + 16
-        alt  = 22
-
-        if tx + larg > self.width() - 4:
-            tx = pos_tela.x() - raio_tela - larg - 8
-        ty = max(4, min(ty, self.height() - alt - 4))
-
+        if not self._no_hover or self._no_hover == self._no_selecionado: return
+        ip, dados = self._no_hover, self.dispositivos.get(self._no_hover, {})
+        txt = "Internet (IPs externos)" if ip == "internet" else f"{ip} - {self._nome_preferencial_dispositivo(dados, ip)}" if self._nome_preferencial_dispositivo(dados, ip) != ip else ip
+        pos_m = self._posicoes_mundo.get(ip)
+        if not pos_m: return
+        pos_t, r_t = self._mundo_para_tela(pos_m), self._raio_do_no(ip)*self._zoom
+        tx, ty = pos_t.x() + r_t + 8, pos_t.y() - 14
+        fm = QFontMetrics(QFont("Arial", 9))
+        larg, alt = fm.horizontalAdvance(txt)+16, 22
+        if tx+larg > self.width()-4: tx = pos_t.x() - r_t - larg - 8
+        ty = max(4, min(ty, self.height()-alt-4))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(QColor(18, 28, 50, 230)))
         path = QPainterPath()
@@ -1054,50 +821,31 @@ class VisualizadorTopologia(QWidget):
         p.drawPath(path)
         p.setPen(QPen(QColor(52, 152, 219, 120), 1))
         p.drawPath(path)
-
         p.setPen(QPen(QColor(220, 230, 245)))
         p.setFont(QFont("Arial", 9))
-        p.drawText(
-            QRectF(tx + 8, ty, larg - 8, alt),
-            Qt.AlignmentFlag.AlignVCenter, txt
-        )
+        p.drawText(QRectF(tx+8, ty, larg-8, alt), Qt.AlignmentFlag.AlignVCenter, txt)
 
     def _pintar_dica(self, p: QPainter):
-        p.setPen(QPen(QColor(55, 70, 100)))
-        p.setFont(QFont("Arial", 7))
-        p.drawText(
-            QRectF(8, self.height() - 16, 350, 13),
-            Qt.AlignmentFlag.AlignLeft,
-            "Scroll: zoom  |  Arrastar: mover  |  Clique: detalhes  |  Duplo clique: apelido"
-        )
-
-    # ── Utilitarios internos ───────────────────────────────────────────────
+        p.setPen(QPen(QColor(55, 70, 100))); p.setFont(QFont("Arial", 7))
+        p.drawText(QRectF(8, self.height()-16, 350, 13), Qt.AlignmentFlag.AlignLeft, "Scroll: zoom  |  Arrastar: mover  |  Clique: detalhes  |  Duplo clique: apelido")
 
     def _cor_do_no(self, ip: str) -> QColor:
-        if ip == "internet":
-            return self.COR_NO_INTERNET
-        if ip == self._ip_local:
-            return self.COR_NO_LOCAL
-        if self._ip_eh_gateway(ip):
-            return self.COR_NO_GATEWAY
+        if ip == "internet": return self.COR_NO_INTERNET
+        if ip == self._ip_local: return self.COR_NO_LOCAL
+        if self._ip_eh_gateway(ip): return self.COR_NO_GATEWAY
         return self.COR_NO_NORMAL
 
     def _tipo_do_no(self, ip: str) -> str:
         dados = self.dispositivos.get(ip, {})
-        if dados.get("tipo_identificado"):
-            return dados["tipo_identificado"]
-        if ip == "internet":
-            return "Externo / Internet"
-        if ip == self._ip_local:
-            return "Este computador"
-        if self._ip_eh_gateway(ip):
-            return "Gateway / Roteador"
+        if dados.get("tipo_identificado"): return dados["tipo_identificado"]
+        if ip == "internet": return "Externo / Internet"
+        if ip == self._ip_local: return "Este computador"
+        if self._ip_eh_gateway(ip): return "Gateway / Roteador"
         return "Dispositivo local"
 
     def _ip_eh_gateway(self, ip: str) -> bool:
-        for info_subrede in self.subredes.values():
-            if info_subrede.get("gateway") == ip:
-                return True
+        for info in self.subredes.values():
+            if info.get("gateway") == ip: return True
         return ip.endswith(".1") or ip.endswith(".254")
 
     def total_dispositivos_nao_internet(self) -> int:
@@ -1105,271 +853,128 @@ class VisualizadorTopologia(QWidget):
 
     def _raio_do_no(self, ip: str) -> float:
         pacotes = self.dispositivos.get(ip, {}).get("pacotes", 0)
-        if pacotes <= 0:
-            return float(self.RAIO_BASE)
+        if pacotes <= 0: return float(self.RAIO_BASE)
         bonus = math.log1p(pacotes) * 1.8
         return min(float(self.RAIO_MAX), max(float(self.RAIO_MIN), self.RAIO_BASE + bonus))
 
     def _mundo_para_tela(self, pt: QPointF) -> QPointF:
-        return QPointF(
-            pt.x() * self._zoom + self._offset.x(),
-            pt.y() * self._zoom + self._offset.y(),
-        )
+        return QPointF(pt.x() * self._zoom + self._offset.x(), pt.y() * self._zoom + self._offset.y())
 
     def _tela_para_mundo(self, pt: QPointF) -> QPointF:
-        return QPointF(
-            (pt.x() - self._offset.x()) / self._zoom,
-            (pt.y() - self._offset.y()) / self._zoom,
-        )
+        return QPointF((pt.x() - self._offset.x()) / self._zoom, (pt.y() - self._offset.y()) / self._zoom)
 
     def _no_em(self, pos_tela: QPointF) -> Optional[str]:
-        pt_mundo = self._tela_para_mundo(pos_tela)
-        for ip, pos_mundo in self._posicoes_mundo.items():
+        pt_m = self._tela_para_mundo(pos_tela)
+        for ip, pos_m in self._posicoes_mundo.items():
             raio = self._raio_do_no(ip) + 4
-            dx   = pt_mundo.x() - pos_mundo.x()
-            dy   = pt_mundo.y() - pos_mundo.y()
-            if dx * dx + dy * dy <= raio * raio:
-                return ip
+            dx, dy = pt_m.x() - pos_m.x(), pt_m.y() - pos_m.y()
+            if dx*dx + dy*dy <= raio*raio: return ip
         return None
 
     def _recalcular_layout(self):
-        locais   = [ip for ip in self.dispositivos if ip != "internet"]
-        tem_inet = "internet" in self.dispositivos
-        n        = len(locais)
-
-        raio_no_layout    = self.RAIO_BASE + 4
-        margem            = raio_no_layout * 2.8
-        raio_anel_inicial = max(margem * 2.2, 60.0)
-        incremento_anel   = margem * 2.4
-
-        aneis = []
-        restantes = list(locais)
-        idx_anel  = 0
+        locais, tem_inet = [ip for ip in self.dispositivos if ip != "internet"], "internet" in self.dispositivos
+        raio_no, margem = self.RAIO_BASE+4, (self.RAIO_BASE+4)*2.8
+        r_anel, inc_anel = max(margem*2.2, 60.0), margem*2.4
+        aneis, restantes, idx = [], list(locais), 0
         while restantes:
-            r   = raio_anel_inicial + idx_anel * incremento_anel
+            r = r_anel + idx * inc_anel
             cap = max(1, int(2 * math.pi * r / margem))
-            aneis.append(restantes[:cap])
-            restantes = restantes[cap:]
-            idx_anel += 1
-
-        for idx_anel, ips_anel in enumerate(aneis):
-            r = raio_anel_inicial + idx_anel * incremento_anel
-            m = len(ips_anel)
-            for i, ip in enumerate(ips_anel):
+            aneis.append(restantes[:cap]); restantes = restantes[cap:]; idx += 1
+        for idx, ips in enumerate(aneis):
+            r = r_anel + idx * inc_anel
+            m = len(ips)
+            for i, ip in enumerate(ips):
                 ang = (2 * math.pi * i / max(m, 1)) - math.pi / 2
-                self._posicoes_mundo[ip] = QPointF(
-                    r * math.cos(ang),
-                    r * math.sin(ang),
-                )
-
+                self._posicoes_mundo[ip] = QPointF(r * math.cos(ang), r * math.sin(ang))
         if tem_inet:
-            raio_ext = raio_anel_inicial + max(len(aneis) - 1, 0) * incremento_anel
-            self._posicoes_mundo["internet"] = QPointF(raio_ext * 1.55, 0)
-
+            r_ext = r_anel + max(len(aneis)-1, 0) * inc_anel
+            self._posicoes_mundo["internet"] = QPointF(r_ext * 1.55, 0)
         self._auto_zoom()
 
     def _auto_zoom(self):
-        if not self._posicoes_mundo:
-            return
-
-        xs = [p.x() for p in self._posicoes_mundo.values()]
-        ys = [p.y() for p in self._posicoes_mundo.values()]
-
-        margem_extra = self.RAIO_MAX + 50
-        xmin, xmax = min(xs) - margem_extra, max(xs) + margem_extra
-        ymin, ymax = min(ys) - margem_extra, max(ys) + margem_extra
-
-        larg_mundo = xmax - xmin
-        alt_mundo  = ymax - ymin
-        if larg_mundo <= 0 or alt_mundo <= 0:
-            return
-
-        zoom_x = self.width()  / larg_mundo
-        zoom_y = self.height() / alt_mundo
-        self._zoom = max(0.2, min(zoom_x, zoom_y, 3.5))
-
-        cx_mundo = (xmin + xmax) / 2
-        cy_mundo = (ymin + ymax) / 2
-        self._offset = QPointF(
-            self.width()  / 2 - cx_mundo * self._zoom,
-            self.height() / 2 - cy_mundo * self._zoom,
-        )
+        if not self._posicoes_mundo: return
+        xs, ys = [p.x() for p in self._posicoes_mundo.values()], [p.y() for p in self._posicoes_mundo.values()]
+        m_e = self.RAIO_MAX + 50
+        xmin, xmax, ymin, ymax = min(xs)-m_e, max(xs)+m_e, min(ys)-m_e, max(ys)+m_e
+        l_m, a_m = xmax-xmin, ymax-ymin
+        if l_m <= 0 or a_m <= 0: return
+        self._zoom = max(0.2, min(self.width()/l_m, self.height()/a_m, 3.5))
+        self._offset = QPointF(self.width()/2 - (xmin+xmax)/2*self._zoom, self.height()/2 - (ymin+ymax)/2*self._zoom)
 
     def _passo_animacao(self):
-        # Não repinta se o widget não está visível — economiza CPU
-        # quando o usuário está em outra aba.
-        if not self.isVisible():
-            self._fase_animacao += 1
-            return
+        if not self.isVisible(): self._fase_animacao += 1; return
         self._fase_animacao += 1
-        if self._ip_local and self._ip_local in self._posicoes_mundo:
-            self.update()
-        elif self._fase_animacao % 4 == 0:
+        if (self._ip_local and self._ip_local in self._posicoes_mundo) or self._fase_animacao % 4 == 0:
             self.update()
 
     def resizeEvent(self, evento):
-        self._auto_zoom()
-        super().resizeEvent(evento)
+        self._auto_zoom(); super().resizeEvent(evento)
 
 
 # ── Painel contentor ──────────────────────────────────────────────────────────
 
 class PainelTopologia(QWidget):
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self._montar_layout()
         self.gerenciador = GerenciadorDispositivos()
 
     def _montar_layout(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        self._area = QWidget()
-        self._area.setMinimumSize(500, 350)
-
+        layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(0)
+        self._area = QWidget(); self._area.setMinimumSize(500, 350)
         self.visualizador = VisualizadorTopologia(self._area)
-        self.visualizador.setGeometry(0, 0,
-                                      self._area.width(),
-                                      self._area.height())
-
-        self._painel_detalhes = PainelDetalhes(self._area)
-        self._painel_detalhes.raise_()
-
+        self.visualizador.setGeometry(0, 0, self._area.width(), self._area.height())
+        self._painel_detalhes = PainelDetalhes(self._area); self._painel_detalhes.raise_()
         self.visualizador.on_no_clicado = self._on_no_clicado
-
         layout.addWidget(self._area, 1)
-
-        rodape = QLabel(
-            "Apenas dispositivos que originaram pacotes são exibidos. "
-            "IPs externos são agrupados em 'Internet'. "
-            "Nós maiores = maior volume de tráfego. "
-            "Clique em um nó para detalhes."
-        )
-        rodape.setStyleSheet(
-            "color: #566573; font-size: 9px; padding: 3px 6px;"
-            "background: rgba(10,14,24,180);"
-        )
+        rodape = QLabel("Apenas dispositivos que originaram pacotes são exibidos. IPs externos são agrupados em 'Internet'. Nós maiores = maior volume de tráfego. Clique em um nó para detalhes.")
+        rodape.setStyleSheet("color: #566573; font-size: 9px; padding: 3px 6px; background: rgba(10,14,24,180);")
         layout.addWidget(rodape)
 
     def resizeEvent(self, evento):
         super().resizeEvent(evento)
-        self.visualizador.setGeometry(0, 0,
-                                      self._area.width(),
-                                      self._area.height())
+        self.visualizador.setGeometry(0, 0, self._area.width(), self._area.height())
         self._reposicionar_painel()
 
     def _reposicionar_painel(self):
-        w  = self._area.width()
-        pw = self._painel_detalhes.width()
-        self._painel_detalhes.move(w - pw - 10, 10)
+        self._painel_detalhes.move(self._area.width() - self._painel_detalhes.width() - 10, 10)
 
     def _on_no_clicado(self, ip: Optional[str]):
         if not ip or ip not in self.visualizador.dispositivos:
-            self._painel_detalhes.hide()
-            return
-        dados = self.visualizador.dispositivos[ip]
-        tipo  = self.visualizador._tipo_do_no(ip)
-        cor   = self.visualizador._cor_do_no(ip)
+            self._painel_detalhes.hide(); return
+        dados, tipo, cor = self.visualizador.dispositivos[ip], self.visualizador._tipo_do_no(ip), self.visualizador._cor_do_no(ip)
         self._painel_detalhes.exibir(ip, dados, tipo, cor)
-        self._reposicionar_painel()
-        self._painel_detalhes.raise_()
-
-    # ── Metodos publicos usados pela janela principal ──────────────────────
+        self._reposicionar_painel(); self._painel_detalhes.raise_()
 
     def adicionar_dispositivo(self, ip: str, mac: str = "", hostname: str = ""):
-        """
-        Registra um dispositivo observado via captura passiva (sniffer).
-        Enriquece os dados com fabricante OUI e apelido personalizado.
-        """
-        fabricante = self.gerenciador.identificar_fabricante(mac) if mac else ""
-        apelido    = self.gerenciador.obter_apelido(mac)          if mac else ""
-
-        self.visualizador.registrar_origem(
-            ip, mac, hostname or apelido,
-            confirmado_por_arp=False,
-        )
-
+        f, a = self.gerenciador.identificar_fabricante(mac) if mac else "", self.gerenciador.obter_apelido(mac) if mac else ""
+        self.visualizador.registrar_origem(ip, mac, hostname or a, confirmado_por_arp=False)
         if ip in self.visualizador.dispositivos:
-            self.visualizador.dispositivos[ip]["fabricante"] = fabricante
-            self.visualizador.dispositivos[ip]["apelido"]    = apelido
+            self.visualizador.dispositivos[ip]["fabricante"], self.visualizador.dispositivos[ip]["apelido"] = f, a
 
     def adicionar_dispositivo_manual(self, ip: str, mac: str = "", hostname: str = ""):
-        """
-        Registra um dispositivo descoberto via varredura ARP ativa.
-        Fonte primária e confiável — enriquece com OUI e apelido.
-        """
-        fabricante = self.gerenciador.identificar_fabricante(mac) if mac else ""
-        apelido    = self.gerenciador.obter_apelido(mac)          if mac else ""
-
-        self.visualizador.registrar_origem(
-            ip, mac, hostname or apelido,
-            confirmado_por_arp=True,
-        )
-
+        f, a = self.gerenciador.identificar_fabricante(mac) if mac else "", self.gerenciador.obter_apelido(mac) if mac else ""
+        self.visualizador.registrar_origem(ip, mac, hostname or a, confirmado_por_arp=True)
         if ip in self.visualizador.dispositivos:
-            self.visualizador.dispositivos[ip]["fabricante"] = fabricante
-            self.visualizador.dispositivos[ip]["apelido"]    = apelido
+            self.visualizador.dispositivos[ip]["fabricante"], self.visualizador.dispositivos[ip]["apelido"] = f, a
 
     def definir_apelido_dispositivo(self, mac: str, apelido: str):
-        """
-        Define um apelido personalizado para o dispositivo.
-
-        O apelido é persistido em JSON e exibido na topologia
-        como nome do nó (quando disponível).
-
-        Args:
-            mac:    endereço MAC do dispositivo.
-            apelido: nome amigável (ex.: "Notebook do Professor").
-        """
         self.gerenciador.salvar_apelido(mac, apelido)
-
         for ip, dados in self.visualizador.dispositivos.items():
             if dados.get("mac", "").upper() == mac.upper():
-                dados["apelido"] = apelido
-                break
-
+                dados["apelido"] = apelido; break
         self.visualizador.update()
 
-    def adicionar_conexao(self, ip_origem: str, ip_destino: str,
-                          porta_origem: int = 0, porta_destino: int = 0):
-        self.visualizador.registrar_conexao(
-            ip_origem, ip_destino, porta_origem, porta_destino
-        )
+    def adicionar_conexao(self, ip_origem: str, ip_destino: str, porta_origem: int = 0, porta_destino: int = 0):
+        self.visualizador.registrar_conexao(ip_origem, ip_destino, porta_origem, porta_destino)
 
-    def adicionar_dispositivo_com_subrede(
-        self,
-        ip: str,
-        mac: str,
-        cidr: str,
-        local: bool,
-        hostname: str = "",
-        confirmado_por_arp: bool = False,
-    ):
-        self.visualizador.adicionar_dispositivo_com_subrede(
-            ip, mac, cidr, local, hostname, confirmado_por_arp
-        )
+    def adicionar_dispositivo_com_subrede(self, ip: str, mac: str, cidr: str, local: bool, hostname: str = "", confirmado_por_arp: bool = False):
+        self.visualizador.adicionar_dispositivo_com_subrede(ip, mac, cidr, local, hostname, confirmado_por_arp)
 
-    def atualizar_subredes(self, lista_subredes):
-        self.visualizador.atualizar_subredes(lista_subredes)
-
-    def atualizar(self):
-        self.visualizador.update()
-
-    def definir_rede_local(self, cidr: str):
-        self.visualizador.definir_rede_local(cidr)
-
-    def limpar(self):
-        self._painel_detalhes.hide()
-        self.visualizador.limpar()
-
-    def total_dispositivos(self) -> int:
-        return self.visualizador.total_dispositivos_nao_internet()
-
+    def atualizar_subredes(self, lista_subredes): self.visualizador.atualizar_subredes(lista_subredes)
+    def atualizar(self): self.visualizador.update()
+    def definir_rede_local(self, cidr: str): self.visualizador.definir_rede_local(cidr)
+    def limpar(self): self._painel_detalhes.hide(); self.visualizador.limpar()
+    def total_dispositivos(self) -> int: return self.visualizador.total_dispositivos_nao_internet()
     def total_dispositivos_ativos(self) -> int:
-        return sum(
-            1
-            for ip, d in self.visualizador.dispositivos.items()
-            if ip != "internet" and d.get("pacotes", 0) > 0
-        )
+        return sum(1 for ip, d in self.visualizador.dispositivos.items() if ip != "internet" and d.get("pacotes", 0) > 0)

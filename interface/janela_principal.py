@@ -27,7 +27,7 @@ from interface.painel_eventos import PainelEventos
 from painel_servidor import PainelServidor
 from utils.constantes import PORTAS_HTTP, PORTAS_DHCP
 from utils.gerenciador_subredes import GerenciadorSubRedes, Visibilidade
-from utils.rede import obter_ip_local, detectar_cidr_robusto, converter_ip_mascara_para_cidr
+from utils.rede import obter_ip_local, detectar_cidr_robusto, converter_ip_mascara_para_cidr, formatar_bytes
 from utils.identificador import GerenciadorDispositivos
 
 
@@ -1803,12 +1803,15 @@ class JanelaPrincipal(QMainWindow):
             total_ativos           =self.painel_topologia.total_dispositivos(),
         )
         self.painel_topologia.atualizar()
-        self.painel_eventos.atualizar_insights(
-            snap.get("top_dns",   []),
-            snap.get("historias", []),
-        )
-
+        
         kb = total_bytes / 1024
+        curr_cidr = self._cidr_captura or ""
+        
+        self.painel_eventos.atualizar_stats(
+            pacotes=total_pacotes,
+            rede=curr_cidr if curr_cidr else "—",
+            dados=formatar_bytes(total_bytes)
+        )
         # Garante que o CIDR atualizado seja mostrado
         curr_cidr = self._cidr_captura
         cidr_label = f"Rede: {curr_cidr}" if (curr_cidr and "/32" not in str(curr_cidr)) else "Rede: Detectando..."
