@@ -1,13 +1,10 @@
 # interface/painel_eventos.py
-# Painel do Modo Análise — v6.0
+# Painel do Modo Análise — v6.1
 #
-# Redesign completo com foco em:
-#   - Layout totalmente adaptativo (splitter proporcional, sem px fixos)
-#   - Hierarquia visual clara e consistente com o restante do NetLab
-#   - Itens da lista com informação densa mas legível
-#   - Painel de detalhe com seções bem delimitadas e sem truncamento
-#   - Badges em linha separada estável (sem layout shift)
-#   - Todas as funções da versão anterior preservadas e aprimoradas
+# PATCHES v6.1:
+#   - _MetaGrid filtra automaticamente linhas com valor vazio, "—" ou "0 bytes"
+#   - _ItemWidget omite o prefixo "— >" quando ip_origem não está disponível
+#   - _aba_evidencias não exibe Tamanho quando 0 nem Porta quando ausente
 
 from collections import defaultdict, deque
 
@@ -26,30 +23,28 @@ from utils.rede import corrigir_mojibake
 # TOKENS DE DESIGN — Sistema de cores do NetLab Educacional
 # ══════════════════════════════════════════════════════════════
 
-_BG       = "#0a0e1a"       # fundo principal — mais profundo
-_BG2      = "#0f1423"       # fundo secundário
-_SURFACE  = "#111827"       # superfícies elevadas
-_SURFACE2 = "#161d2e"       # superfícies secundárias
-_CARD     = "#0d1220"       # cards / containers internos
-_BORDA    = "#1a2540"       # bordas sutis
-_BORDA2   = "#243352"       # bordas de foco/hover
-_SEL      = "#1a3a5c"       # seleção
-_SEL2     = "#1e4571"       # seleção hover
-_ACCENT   = "#3d9fd3"       # azul principal
-_ACCENT2  = "#5ab4e5"       # azul claro
-_TEXTO    = "#dde6f0"       # texto principal
-_TEXTO2   = "#aabdcc"       # texto secundário
-_MUTED    = "#6b7f94"       # texto muted
-_DIM      = "#3d5166"       # texto dim
-_LINHA    = "#131c2e"       # separadores internos
+_BG       = "#0a0e1a"
+_BG2      = "#0f1423"
+_SURFACE  = "#111827"
+_SURFACE2 = "#161d2e"
+_CARD     = "#0d1220"
+_BORDA    = "#1a2540"
+_BORDA2   = "#243352"
+_SEL      = "#1a3a5c"
+_SEL2     = "#1e4571"
+_ACCENT   = "#3d9fd3"
+_ACCENT2  = "#5ab4e5"
+_TEXTO    = "#dde6f0"
+_TEXTO2   = "#aabdcc"
+_MUTED    = "#6b7f94"
+_DIM      = "#3d5166"
+_LINHA    = "#131c2e"
 
-# Cores semânticas de nível
 _CRITICO  = "#e05252"
 _AVISO    = "#d4872a"
 _INFO     = "#3d9fd3"
 _OK       = "#3dba7e"
 
-# Paleta de protocolos
 _PROTO_COR = {
     "HTTPS":            "#3dba7e",
     "HTTP":             "#e05252",
@@ -72,8 +67,6 @@ _PROTO_LABEL = {
     "SMB": "SMB", "RDP": "RDP", "NOVO_DISPOSITIVO": "NOVO",
 }
 
-_PROTO_ICONE = {}
-
 _NIVEL_COR = {
     "CRITICO": _CRITICO,
     "AVISO":   _AVISO,
@@ -83,15 +76,10 @@ _NIVEL_COR = {
 
 def _cor(tipo):  return _PROTO_COR.get(tipo, _MUTED)
 def _lbl(tipo):  return _PROTO_LABEL.get(tipo, (tipo[:4] if tipo else "PKT"))
-def _ico(tipo):  return ""
 def _rgb(hex_c):
     c = QColor(hex_c)
     return c.red(), c.green(), c.blue()
 
-
-# ══════════════════════════════════════════════════════════════
-# SCROLLBAR STYLE — reutilizado em toda a UI
-# ══════════════════════════════════════════════════════════════
 
 _SCROLL_SS = f"""
     QScrollBar:vertical {{
@@ -116,8 +104,6 @@ _SCROLL_SS = f"""
 # ══════════════════════════════════════════════════════════════
 
 class _Badge(QPushButton):
-    """Botão de filtro por protocolo com indicador de contagem."""
-
     def __init__(self, proto: str, parent=None):
         super().__init__(parent)
         self.proto  = proto
@@ -187,15 +173,10 @@ class _Badge(QPushButton):
 
 # ══════════════════════════════════════════════════════════════
 # ITEM DA LISTA DE EVENTOS
+# PATCH v6.1: omite "— >" quando ip_origem não está disponível
 # ══════════════════════════════════════════════════════════════
 
 class _ItemWidget(QWidget):
-    """
-    Card compacto para cada evento na lista lateral.
-    Layout:
-      [faixa cor] [icone] [coluna: badge+IPs / info extra] [timestamp]
-    """
-
     HEIGHT = 68
 
     def __init__(self, evento: dict, parent=None):
@@ -213,27 +194,23 @@ class _ItemWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Faixa lateral colorida por protocolo
         faixa = QFrame()
         faixa.setFixedWidth(4)
         faixa.setStyleSheet(f"background: {cor}; border: none;")
         root.addWidget(faixa)
 
-        # Separador vertical sutil (ajustado sem o ícone)
         sep = QFrame()
         sep.setFixedWidth(1)
         sep.setFixedHeight(36)
         sep.setStyleSheet(f"background: {_BORDA}; border: none;")
         root.addWidget(sep)
 
-        # Coluna central: informações do evento
         corpo = QWidget()
         corpo.setStyleSheet("background: transparent;")
         cl = QVBoxLayout(corpo)
         cl.setContentsMargins(12, 8, 8, 8)
         cl.setSpacing(4)
 
-        # Linha 1: badge protocolo + IPs
         r1 = QHBoxLayout()
         r1.setSpacing(6)
         r1.setContentsMargins(0, 0, 0, 0)
@@ -254,26 +231,16 @@ class _ItemWidget(QWidget):
             letter-spacing: 0.5px;
         """)
 
-        ip_orig = evento.get("ip_origem", "—")
-        ip_dest = evento.get("ip_destino", "—")
+        # ── PATCH v6.1: não exibe "— >" quando ip_origem está vazio ──────
+        ip_orig = (evento.get("ip_origem") or "").strip()
+        ip_dest = (evento.get("ip_destino") or "").strip()
 
-        lbl_orig = QLabel(ip_orig)
-        lbl_orig.setStyleSheet(
-            f"color: {_TEXTO}; font-family: Consolas; font-size: 11px; "
-            "font-weight: bold; background: transparent;"
-        )
-
-        lbl_seta = QLabel(">")
-        lbl_seta.setStyleSheet(f"color: {_DIM}; font-size: 11px; background: transparent;")
-        lbl_seta.setFixedWidth(12)
-
-        lbl_dest = QLabel(ip_dest)
+        lbl_dest = QLabel(ip_dest or "—")
         lbl_dest.setStyleSheet(
             f"color: {_ACCENT2}; font-family: Consolas; font-size: 11px; "
             "background: transparent;"
         )
 
-        # Indicador de nível crítico/aviso
         if nivel in ("CRITICO", "AVISO"):
             dot = QLabel("!")
             dot.setStyleSheet(
@@ -282,13 +249,25 @@ class _ItemWidget(QWidget):
             r1.addWidget(dot)
 
         r1.addWidget(badge)
-        r1.addWidget(lbl_orig)
-        r1.addWidget(lbl_seta)
+
+        if ip_orig and ip_orig != "—":
+            lbl_orig = QLabel(ip_orig)
+            lbl_orig.setStyleSheet(
+                f"color: {_TEXTO}; font-family: Consolas; font-size: 11px; "
+                "font-weight: bold; background: transparent;"
+            )
+            lbl_seta = QLabel(">")
+            lbl_seta.setStyleSheet(
+                f"color: {_DIM}; font-size: 11px; background: transparent;"
+            )
+            lbl_seta.setFixedWidth(12)
+            r1.addWidget(lbl_orig)
+            r1.addWidget(lbl_seta)
+
         r1.addWidget(lbl_dest)
         r1.addStretch()
         cl.addLayout(r1)
 
-        # Linha 2: info contextual (domínio, caminho, mac, porta)
         sub = (
             evento.get("dominio")
             or evento.get("http_caminho")
@@ -309,7 +288,6 @@ class _ItemWidget(QWidget):
 
         root.addWidget(corpo, 1)
 
-        # Timestamp alinhado à direita, centralizado verticalmente
         lbl_ts = QLabel(evento.get("timestamp", ""))
         lbl_ts.setFixedWidth(54)
         lbl_ts.setAlignment(
@@ -327,8 +305,6 @@ class _ItemWidget(QWidget):
 # ══════════════════════════════════════════════════════════════
 
 class _SecaoHeader(QWidget):
-    """Cabeçalho de seção com linha decorativa."""
-
     def __init__(self, titulo: str, cor: str = _MUTED, parent=None):
         super().__init__(parent)
         self.setFixedHeight(28)
@@ -355,12 +331,18 @@ class _SecaoHeader(QWidget):
 
 
 # ══════════════════════════════════════════════════════════════
-# GRID DE METADADOS (tabela chave/valor estilizada)
+# GRID DE METADADOS
+# PATCH v6.1: pré-filtra linhas sem valor antes de renderizar
 # ══════════════════════════════════════════════════════════════
 
-class _MetaGrid(QFrame):
-    """Grade de metadados chave-valor com design limpo."""
+# Valores considerados "sem informação" — linhas com esses valores são omitidas
+_META_SKIP = frozenset({
+    "—", "", "none", "0 bytes", "0",
+    "não extraído neste pacote", "não extraído",
+})
 
+
+class _MetaGrid(QFrame):
     def __init__(self, campos: list, parent=None):
         """campos: lista de (rotulo, valor, cor_valor_opcional)"""
         super().__init__(parent)
@@ -374,6 +356,13 @@ class _MetaGrid(QFrame):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
+
+        # ── PATCH v6.1: remove linhas sem valor ──────────────────────────
+        campos = [
+            c for c in campos
+            if str(c[1]).strip().lower() not in _META_SKIP
+        ]
+        # ─────────────────────────────────────────────────────────────────
 
         for i, campo in enumerate(campos):
             rot   = campo[0]
@@ -414,7 +403,6 @@ class PainelEventos(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # Estado
         self._todos_eventos  = deque(maxlen=150)
         self._evento_atual   = None
         self._filtro_proto   = "Todos"
@@ -422,10 +410,9 @@ class PainelEventos(QWidget):
         self._aba_ativa      = "analise"
         self._badges         = {}
         self._contadores     = defaultdict(int)
-        self._item_map       = []   # (evento, QListWidgetItem, _ItemWidget)
+        self._item_map       = []
         self._stats_cache    = {"pacotes": 0, "rede": "—", "dados": "0 B"}
 
-        # Timer debounce para busca
         self._timer_busca = QTimer(self)
         self._timer_busca.setSingleShot(True)
         self._timer_busca.setInterval(120)
@@ -444,7 +431,6 @@ class PainelEventos(QWidget):
 
         root.addWidget(self._mk_topbar())
 
-        # Splitter principal: lista | detalhe
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         self._splitter.setHandleWidth(1)
         self._splitter.setChildrenCollapsible(False)
@@ -462,7 +448,7 @@ class PainelEventos(QWidget):
         root.addWidget(self._mk_rodape())
 
     # ─────────────────────────────────────────────────────────
-    # TOPBAR: título + busca / linha de badges
+    # TOPBAR
     # ─────────────────────────────────────────────────────────
 
     def _mk_topbar(self) -> QWidget:
@@ -472,7 +458,6 @@ class PainelEventos(QWidget):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
 
-        # ── Linha 1: título + campo de busca ─────────────────
         linha1 = QFrame()
         linha1.setFixedHeight(48)
         linha1.setStyleSheet(
@@ -493,14 +478,12 @@ class PainelEventos(QWidget):
         """)
         l1.addWidget(lbl_titulo)
 
-        # Separador vertical
         sep_v = QFrame()
         sep_v.setFrameShape(QFrame.Shape.VLine)
         sep_v.setFixedHeight(18)
         sep_v.setStyleSheet(f"background: {_BORDA}; border: none;")
         l1.addWidget(sep_v)
 
-        # Contagem global
         self._lbl_contagem_global = QLabel("0 eventos")
         self._lbl_contagem_global.setStyleSheet(
             f"color: {_DIM}; font-family: Consolas; font-size: 10px;"
@@ -509,7 +492,6 @@ class PainelEventos(QWidget):
 
         l1.addStretch()
 
-        # Campo de busca
         self._campo_busca = QLineEdit()
         self._campo_busca.setPlaceholderText("Buscar IP, domínio, protocolo...")
         self._campo_busca.setMinimumWidth(220)
@@ -536,7 +518,6 @@ class PainelEventos(QWidget):
         self._campo_busca.textChanged.connect(self._ao_busca_mudou)
         l1.addWidget(self._campo_busca)
 
-        # Botão limpar busca
         self._btn_limpar_busca = QPushButton("X")
         self._btn_limpar_busca.setFixedSize(24, 24)
         self._btn_limpar_busca.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -559,7 +540,6 @@ class PainelEventos(QWidget):
 
         v.addWidget(linha1)
 
-        # ── Linha 2: badges de protocolo ─────────────────────
         linha2 = QFrame()
         linha2.setFixedHeight(36)
         linha2.setStyleSheet(
@@ -582,7 +562,6 @@ class PainelEventos(QWidget):
 
         l2.addStretch()
 
-        # Contagem filtrada
         self._lbl_contagem = QLabel("0 / 0")
         self._lbl_contagem.setStyleSheet(
             f"color: {_DIM}; font-family: Consolas; font-size: 10px;"
@@ -610,7 +589,6 @@ class PainelEventos(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
-        # Cabeçalho da lista
         cab = QFrame()
         cab.setFixedHeight(32)
         cab.setStyleSheet(f"""
@@ -630,7 +608,6 @@ class PainelEventos(QWidget):
         cl.addStretch()
         lay.addWidget(cab)
 
-        # Lista
         self._lista = QListWidget()
         self._lista.setStyleSheet(f"""
             QListWidget {{
@@ -671,7 +648,6 @@ class PainelEventos(QWidget):
         lay.addWidget(self._mk_header_detalhe())
         lay.addWidget(self._mk_barra_abas())
 
-        # Área de conteúdo scrollável
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet(f"""
@@ -706,7 +682,6 @@ class PainelEventos(QWidget):
         lay.setContentsMargins(24, 14, 24, 14)
         lay.setSpacing(6)
 
-        # Linha 1: badge protocolo + título + timestamp
         r1 = QHBoxLayout()
         r1.setSpacing(12)
         r1.setContentsMargins(0, 0, 0, 0)
@@ -754,7 +729,6 @@ class PainelEventos(QWidget):
         r1.addWidget(self._det_ts)
         lay.addLayout(r1)
 
-        # Linha 2: fluxo IP origem → destino + tamanho
         self._det_resumo = QLabel("")
         self._det_resumo.setStyleSheet(
             f"color: {_MUTED}; font-family: Consolas; font-size: 10px; "
@@ -892,7 +866,6 @@ class PainelEventos(QWidget):
         return True
 
     def _filtrar(self):
-        """O(n) show/hide — sem recriar widgets."""
         visiveis = 0
         self._lista.setUpdatesEnabled(False)
         try:
@@ -923,7 +896,6 @@ class PainelEventos(QWidget):
         self._item_map.append((evento, item, widget))
         if not self._passa(evento):
             item.setHidden(True)
-        # Auto-scroll para o último item
         self._lista.scrollToBottom()
 
     def _ao_selecionar(self):
@@ -962,7 +934,6 @@ class PainelEventos(QWidget):
         nivel = e.get("nivel", "INFO")
         r, g, b = _rgb(cor)
 
-        # Atualiza header
         self._det_badge.setText(_lbl(tipo))
         self._det_badge.setStyleSheet(f"""
             background: rgba({r},{g},{b}, 20);
@@ -1003,13 +974,11 @@ class PainelEventos(QWidget):
             f"{tipo}  —  {e.get('ip_origem', '')} → {e.get('ip_destino', '')}"
         )
 
-        # Limpa conteúdo anterior
         while self._lay_c.count() > 1:
             it = self._lay_c.takeAt(0)
             if it.widget():
                 it.widget().deleteLater()
 
-        # Renderiza a aba ativa
         if self._aba_ativa == "analise":
             self._aba_analise(e)
         elif self._aba_ativa == "evidencias":
@@ -1088,7 +1057,6 @@ class PainelEventos(QWidget):
 
     def _inserir_secao(self, titulo: str, widget: QWidget,
                        cor: str = _MUTED, pos: int = -1):
-        """Insere uma seção com cabeçalho no layout de conteúdo."""
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         lay = QVBoxLayout(container)
@@ -1107,7 +1075,6 @@ class PainelEventos(QWidget):
     def _aba_analise(self, e: dict):
         pos = 0
 
-        # Seção 1: O que aconteceu
         html1 = f"""
             <style>{self._CSS_BASE}</style>
             <body>
@@ -1120,7 +1087,6 @@ class PainelEventos(QWidget):
         self._inserir_secao("O QUE ACONTECEU", self._browser(html1), _ACCENT, pos)
         pos += 1
 
-        # Seção 2: Como o protocolo funciona
         html2 = f"""
             <style>{self._CSS_BASE}</style>
             <body style="color: {_TEXTO2};">
@@ -1134,7 +1100,6 @@ class PainelEventos(QWidget):
         self._inserir_secao("COMO FUNCIONA", tb2, _MUTED, pos)
         pos += 1
 
-        # Seção 3: Alerta de segurança (se houver)
         alerta = e.get("alerta_seguranca", "")
         nivel  = e.get("nivel", "INFO")
         if alerta:
@@ -1149,28 +1114,30 @@ class PainelEventos(QWidget):
     def _aba_evidencias(self, e: dict):
         pos = 0
 
-        # Seção 1: Campos do pacote
-        tipo = e.get("tipo", "")
+        tipo    = e.get("tipo", "")
         cifrado = "Sim — TLS" if tipo == "HTTPS" else ("Sim — SSH" if tipo == "SSH" else "Não")
         cor_cifrado = _OK if cifrado.startswith("Sim") else _CRITICO
 
+        # ── PATCH v6.1: valores vazios/zero são omitidos pelo _MetaGrid ──
+        tamanho = e.get("tamanho") or 0
         campos = [
-            ("IP Origem",     e.get("ip_origem",  "—"),   _TEXTO),
-            ("IP Destino",    e.get("ip_destino", "—"),   _ACCENT2),
-            ("Protocolo",     e.get("protocolo",  e.get("tipo", "—")), _cor(tipo)),
-            ("Porta Destino", str(e.get("porta_destino") or "—"),      _TEXTO2),
-            ("Tamanho",       f"{e.get('tamanho', 0)} bytes",          _TEXTO2),
-            ("Cifrado",       cifrado,                                  cor_cifrado),
+            ("IP Origem",     e.get("ip_origem")  or "—",              _TEXTO),
+            ("IP Destino",    e.get("ip_destino") or "—",              _ACCENT2),
+            ("Protocolo",     e.get("protocolo")  or e.get("tipo", "—"), _cor(tipo)),
+            ("Porta Destino", str(e.get("porta_destino") or "—"),       _TEXTO2),
+            ("Tamanho",       f"{tamanho} bytes" if tamanho else "—",   _TEXTO2),
+            ("Cifrado",       cifrado,                                   cor_cifrado),
         ]
         if e.get("dominio"):
             campos.insert(3, ("Domínio", e["dominio"], _ACCENT2))
         if e.get("mac_origem"):
             campos.append(("MAC Origem", e["mac_origem"], _TEXTO2))
+        # _MetaGrid filtra automaticamente linhas com valor "—" ou "0 bytes"
+        # ─────────────────────────────────────────────────────────────────
 
         self._inserir_secao("CAMPOS DO PACOTE", _MetaGrid(campos), _MUTED, pos)
         pos += 1
 
-        # Seção 2: Detalhes técnicos (nivel3)
         n3 = e.get("nivel3", "")
         if n3:
             html3 = f"<style>{self._CSS_BASE}</style><body>{n3}</body>"
@@ -1245,7 +1212,6 @@ class PainelEventos(QWidget):
         self._inserir_secao("SIGNIFICADO OPERACIONAL", self._browser(html_op), _ACCENT, pos)
         pos += 1
 
-        # Payload bruto (nivel4) — se disponível
         n4 = e.get("nivel4", "")
         if n4:
             html_n4 = f"""
@@ -1272,10 +1238,8 @@ class PainelEventos(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # Margem dinâmica no painel de conteúdo
         margin = max(14, min(28, self.width() // 50))
         self._lay_c.setContentsMargins(margin, 18, margin, 24)
-        # Rodapé adaptativo
         self._atualizar_rodape()
 
     def _atualizar_rodape(self):
@@ -1292,8 +1256,6 @@ class PainelEventos(QWidget):
     # ─────────────────────────────────────────────────────────
 
     def adicionar_evento(self, e: dict):
-        """Recebe um evento do motor pedagógico e o adiciona à lista."""
-        # Corrige encoding
         e["titulo"] = corrigir_mojibake(e.get("titulo", "Evento"))
         for k in ("nivel1", "nivel2", "nivel3", "nivel4", "alerta_seguranca"):
             if k in e:
@@ -1305,13 +1267,11 @@ class PainelEventos(QWidget):
         self._contadores[tipo]    += 1
         self._contadores["Todos"] += 1
 
-        # Atualiza badges
         for proto, badge in self._badges.items():
             badge.set_count(self._contadores[proto])
 
         self._inserir_item(e)
 
-        # Atualiza contagem exibida
         visiveis = sum(1 for _, it, _ in self._item_map if not it.isHidden())
         total    = len(self._todos_eventos)
         self._lbl_contagem.setText(f"{visiveis} / {total}")
@@ -1320,7 +1280,6 @@ class PainelEventos(QWidget):
         )
 
     def limpar(self):
-        """Reinicia completamente o painel (nova sessão)."""
         self._todos_eventos.clear()
         self._item_map.clear()
         self._lista.clear()
@@ -1330,7 +1289,6 @@ class PainelEventos(QWidget):
         for b in self._badges.values():
             b.set_count(0)
 
-        # Reset do header
         self._det_titulo.setText("Selecione um evento na lista")
         self._det_ts.setText("")
         self._det_resumo.setText("")
@@ -1348,17 +1306,14 @@ class PainelEventos(QWidget):
         self._lbl_contagem_global.setText("0 eventos")
         self._lbl_status.setText("Aguardando captura")
 
-        # Limpa conteúdo do detalhe
         while self._lay_c.count() > 1:
             it = self._lay_c.takeAt(0)
             if it.widget():
                 it.widget().deleteLater()
 
     def atualizar_stats(self, pacotes: int, rede: str, dados: str):
-        """Atualiza as estatísticas exibidas no rodapé."""
         self._stats_cache = {"pacotes": pacotes, "rede": rede, "dados": dados}
         self._atualizar_rodape()
 
     def _reaplicar_filtros(self):
-        """Chamado pela janela principal ao trocar de aba (lazy-load)."""
         self._filtrar()

@@ -15,9 +15,285 @@ from PyQt6.QtWidgets import (
     QLabel, QPushButton, QComboBox,
     QMessageBox, QTabWidget,
     QDialog, QHBoxLayout, QTextEdit,
+    QProgressBar, QCheckBox, QScrollArea, QFrame, QGroupBox,
+    QSizePolicy
 )
-from PyQt6.QtCore import QTimer, pyqtSlot, QThread, pyqtSignal, QObject, QRunnable, QThreadPool
-from PyQt6.QtGui import QAction
+from PyQt6.QtCore import QTimer, pyqtSlot, QThread, pyqtSignal, QObject, QRunnable, QThreadPool, Qt
+from PyQt6.QtGui import QAction, QColor, QFont
+import socket
+import os
+import platform
+from datetime import datetime
+
+# -------------------------------------------------------------------------
+# Diálogo de Diagnóstico Avançado (UI Moderna)
+# -------------------------------------------------------------------------
+
+class _SecaoColapsavel(QWidget):
+    def __init__(self, titulo, cor, parent=None, colapsado=False):
+        super().__init__(parent)
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(0, 0, 0, 0)
+        self.lay.setSpacing(0)
+
+        self.btn = QPushButton(f"▼  {titulo}")
+        self.btn.setCheckable(True)
+        self.btn.setChecked(not colapsado)
+        self.btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn.setStyleSheet(f"""
+            QPushButton {{
+                text-align: left; font-weight: bold; font-size: 11px; color: {cor};
+                background: rgba(255,255,255, 0.03); border: none;
+                border-bottom: 1px solid rgba(255,255,255, 0.05);
+                padding: 10px 15px; border-radius: 4px;
+            }}
+            QPushButton:hover {{ background: rgba(255,255,255, 0.08); }}
+            QPushButton:checked {{ border-bottom: none; border-radius: 4px 4px 0 0; }}
+        """)
+        self.btn.clicked.connect(self._toggle)
+
+        self.container = QFrame()
+        self.container.setStyleSheet("""
+            QFrame { background: rgba(0,0,0, 0.1); border: 1px solid rgba(255,255,255, 0.05);
+                     border-top: none; border-radius: 0 0 4px 4px; }
+        """)
+        self.c_lay = QVBoxLayout(self.container)
+        self.c_lay.setContentsMargins(12, 8, 12, 12)
+        
+        self.lay.addWidget(self.btn)
+        self.lay.addWidget(self.container)
+        
+        if colapsado:
+            self.container.hide()
+            self.btn.setText(f"▶  {titulo}")
+
+    def _toggle(self):
+        visivel = self.btn.isChecked()
+        self.container.setVisible(visivel)
+        txt = self.btn.text()[3:]
+        self.btn.setText(( "▼  " if visivel else "▶  " ) + txt)
+
+    def add_widget(self, w):
+        self.c_lay.addWidget(w)
+
+class DiagnosticoAvançado(QDialog):
+    def __init__(self, main_window):
+        super().__init__(main_window)
+        self.main = main_window
+        self.setWindowTitle("Diagnóstico de Captura e Rede")
+        self.setMinimumSize(620, 780)
+        
+        self._ACCENT = "#3d9fd3"
+        self._OK     = "#2ecc71"
+        self._AVISO  = "#e67e22"
+        self._ERRO   = "#e74c3c"
+        self._BG     = "#0a0e1a"
+
+        self._setup_ui()
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.atualizar)
+        self.atualizar()
+
+    def _setup_ui(self):
+        self.setStyleSheet(f"""
+            QDialog {{ background: {self._BG}; color: #ecf0f1; }}
+            QLabel {{ color: #ecf0f1; }}
+            QPushButton {{
+                background: #1a2540; color: #dde6f0; border: 1px solid #243352;
+                border-radius: 4px; padding: 6px 14px; font-size: 11px;
+            }}
+            QPushButton:hover {{ background: #243352; }}
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        header = QHBoxLayout()
+        v_head = QVBoxLayout()
+        lbl_t = QLabel("DIAGNÓSTICO DO SISTEMA")
+        lbl_t.setStyleSheet("font-size: 16px; font-weight: bold; letter-spacing: 1px;")
+        self.lbl_ts = QLabel("Gerado em: --:--:--")
+        self.lbl_ts.setStyleSheet("color: #7f8c8d; font-size: 10px;")
+        v_head.addWidget(lbl_t)
+        v_head.addWidget(self.lbl_ts)
+        header.addLayout(v_head)
+        header.addStretch()
+        
+        v_saude = QVBoxLayout()
+        self.lbl_saude = QLabel("Saúde: --/--")
+        self.lbl_saude.setStyleSheet("font-size: 10px; font-weight: bold;")
+        self.bar_saude = QProgressBar()
+        self.bar_saude.setFixedHeight(8)
+        self.bar_saude.setTextVisible(False)
+        self.bar_saude.setStyleSheet(f"""
+            QProgressBar {{ background: #1a2540; border-radius: 4px; border: none; }}
+            QProgressBar::chunk {{ background: {self._OK}; border-radius: 4px; }}
+        """)
+        v_saude.addWidget(self.lbl_saude)
+        v_saude.addWidget(self.bar_saude)
+        header.addLayout(v_saude)
+        layout.addLayout(header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.container = QWidget()
+        self.v_cont = QVBoxLayout(self.container)
+        self.v_cont.setContentsMargins(0, 0, 0, 0)
+        self.v_cont.setSpacing(10)
+        scroll.setWidget(self.container)
+        layout.addWidget(scroll)
+
+        footer = QHBoxLayout()
+        self.chk_auto = QCheckBox("Auto-atualizar (3s)")
+        self.chk_auto.setStyleSheet("color: #7f8c8d; font-size: 11px;")
+        self.chk_auto.toggled.connect(lambda a: self.timer.start(3000) if a else self.timer.stop())
+        footer.addWidget(self.chk_auto)
+        footer.addStretch()
+        
+        btn_exp = QPushButton("Exportar .txt")
+        btn_exp.clicked.connect(self.exportar)
+        footer.addWidget(btn_exp)
+        
+        btn_upd = QPushButton("Atualizar")
+        btn_upd.clicked.connect(self.atualizar)
+        footer.addWidget(btn_upd)
+        
+        btn_ok = QPushButton("Fechar")
+        btn_ok.clicked.connect(self.accept)
+        btn_ok.setStyleSheet(f"background: {self._ACCENT}; color: white; font-weight: bold;")
+        footer.addWidget(btn_ok)
+        layout.addLayout(footer)
+
+    def atualizar(self):
+        while self.v_cont.count():
+            w = self.v_cont.takeAt(0).widget()
+            if w: w.deleteLater()
+            
+        main = self.main
+        desc_sel = main.combo_interface.currentText()
+        nome_iface = main._mapa_interface_nome.get(desc_sel, desc_sel)
+        ip_l = main._mapa_interface_ip.get(desc_sel, obter_ip_local())
+        
+        # Testes
+        is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+        npcap_v = self._get_npcap_version()
+        gateway = self._get_gateway_ip()
+        ping_res, ping_ok = self._ping(gateway) if gateway else ("N/A", False)
+        dns_res, dns_ok = self._test_dns()
+        
+        # Checklist
+        sec_check = _SecaoColapsavel("Checklist de Saúde", self._ACCENT)
+        self.v_cont.addWidget(sec_check)
+        html = "<div>"
+        html += self._fmt_item("Administrador: Ativo" if is_admin else "Administrador: Inativo", "ok" if is_admin else "err")
+        html += self._fmt_item(f"Npcap: {npcap_v}", "ok" if npcap_v != "N/A" else "err")
+        html += self._fmt_item(f"DNS: {dns_res}", "ok" if dns_ok else "warn")
+        if gateway: html += self._fmt_item(f"Gateway ({gateway}): {ping_res}", "ok" if ping_ok else "warn")
+        html += "</div>"
+        lbl = QLabel(); lbl.setText(html); sec_check.add_widget(lbl)
+        
+        # Stats
+        sec_stats = _SecaoColapsavel("Estatísticas e Interface", "#9B59B6")
+        self.v_cont.addWidget(sec_stats)
+        p = main._snapshot_atual.get("total_pacotes", 0)
+        b = main._snapshot_atual.get("total_bytes", 0)
+        eh_wifi = any(x in (nome_iface or "").lower() for x in ("wi-fi", "wifi", "wireless"))
+        
+        stats_html = f"<table style='width:100%; color:#ecf0f1; font-size:10px;'>"
+        stats_html += f"<tr><td>Interface</td><td>{desc_sel}</td></tr>"
+        stats_html += f"<tr><td>IP Local</td><td>{ip_l}</td></tr>"
+        stats_html += f"<tr><td>Pacotes</td><td>{p:,}</td></tr>"
+        stats_html += f"<tr><td>Tráfego</td><td>{formatar_bytes(b)}</td></tr>"
+        if eh_wifi:
+            sig, sok = self._get_wifi_signal()
+            stats_html += f"<tr><td>Sinal Wi-Fi</td><td style='color:{self._OK if sok else self._AVISO}'>{sig}</td></tr>"
+        
+        errs = self._get_iface_errors(nome_iface)
+        if errs and errs['dropin'] > 0:
+            stats_html += f"<tr><td>Drops</td><td style='color:{self._ERRO}'>{errs['dropin']} pkt</td></tr>"
+        stats_html += "</table>"
+        lbl_s = QLabel(); lbl_s.setText(stats_html); sec_stats.add_widget(lbl_s)
+
+        # Wi-Fi Estabilidade
+        if eh_wifi:
+            sec_wifi = _SecaoColapsavel("Estabilidade em Wi-Fi", "#566573", colapsado=True)
+            self.v_cont.addWidget(sec_wifi)
+            lbl_w = QLabel("No modo Wi-Fi, o motor desativa o modo promíscuo e a descoberta ativa agressiva para garantir conectividade.")
+            lbl_w.setWordWrap(True); lbl_w.setStyleSheet("color: #7f8c8d; font-size: 10px;")
+            sec_wifi.add_widget(lbl_w)
+
+        self.v_cont.addStretch()
+        
+        # Barra saude
+        total = 4; passed = (1 if is_admin else 0) + (1 if npcap_v != "N/A" else 0) + (1 if dns_ok else 0) + (1 if ping_ok else 0)
+        self.bar_saude.setMaximum(total); self.bar_saude.setValue(passed)
+        self.lbl_saude.setText(f"Saúde: {passed}/{total}")
+        self.lbl_ts.setText(f"Gerado em: {datetime.now().strftime('%H:%M:%S')}")
+
+    def _fmt_item(self, t, tipo):
+        c = self._OK if tipo == "ok" else (self._AVISO if tipo == "warn" else self._ERRO)
+        return f"<div style='color:{c}; padding:3px; margin:1px; border-left:2px solid {c}; font-size:10px;'>&nbsp;{t}</div>"
+
+    def _get_npcap_version(self):
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Npcap") as k:
+                return winreg.QueryValueEx(k, "")[0] or "Sim"
+        except: return "N/A"
+
+    def _get_gateway_ip(self):
+        try:
+            for e in self.main._obter_tabela_arp_sistema():
+                if e['ip'].split('.')[-1] in ('1', '254'): return e['ip']
+        except: pass
+        return ""
+
+    def _ping(self, ip):
+        try:
+            res = subprocess.run(["ping", "-n", "1", "-w", "500", ip], capture_output=True, text=True, creationflags=0x08000000)
+            if res.returncode == 0:
+                m = re.search(r"tempo[=<](\d+)ms", res.stdout)
+                return (f"{m.group(1)}ms" if m else "OK"), True
+        except: pass
+        return "Falha", False
+
+    def _test_dns(self):
+        try:
+            t = time.perf_counter()
+            socket.gethostbyname("google.com")
+            return f"{(time.perf_counter()-t)*1000:.0f}ms", True
+        except: return "Falha", False
+
+    def _get_wifi_signal(self):
+        try:
+            res = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True, creationflags=0x08000000)
+            m = re.search(r"Sinal\s+:\s+(\d+)%", res.stdout)
+            if m: return f"{m.group(1)}%", True
+        except: pass
+        return "N/A", False
+
+    def _get_iface_errors(self, name):
+        try:
+            import psutil
+            s = psutil.net_io_counters(pernic=True)
+            for k, v in s.items():
+                if name.lower() in k.lower() or k.lower() in name.lower():
+                    return {'dropin': v.dropin}
+        except: pass
+        return None
+
+    def exportar(self):
+        try:
+            path = f"diagnostico_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            with open(path, "w") as f:
+                f.write(f"NetLab v4.0 - Diagnóstico\nGerado em: {datetime.now()}\nInterface: {self.main.combo_interface.currentText()}\n")
+            QMessageBox.information(self, "Exportar", f"Salvo em {path}")
+        except: pass
+
+import platform
+from datetime import datetime
 
 from analisador_pacotes import AnalisadorPacotes
 from motor_pedagogico import MotorPedagogico
@@ -2045,528 +2321,16 @@ class JanelaPrincipal(QMainWindow):
             "tamanho":    0,
         })
 
+    def _exibir_diagnostico_captura(self):
+        diag = DiagnosticoAvançado(self)
+        diag.exec()
+
     @pyqtSlot(list)
     def _ao_concluir_varredura(self, dispositivos: list):
         self._status(
             f"Varredura concluída — {len(dispositivos)} dispositivo(s) encontrado(s)."
         )
         self.descoberta_rodando = False
-
-    # -------------------------------------------------------------------------
-    # Diagnóstico
-    # -------------------------------------------------------------------------
-
-    def _exibir_diagnostico_captura(self):
-        import os
-        try:
-            import winreg
-            _winreg_ok = True
-        except ImportError:
-            _winreg_ok = False
-
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout
-
-        desc_sel         = self.combo_interface.currentText()
-        nome_dispositivo = self._mapa_interface_nome.get(desc_sel, desc_sel)
-        ip_local         = self._mapa_interface_ip.get(desc_sel, obter_ip_local())
-        mascara          = self._mapa_interface_mascara.get(desc_sel, "")
-        
-        # Sincroniza com o estado global da captura
-        cidr = str(self._cidr_captura or "")
-
-        if (not cidr or "/32" in str(cidr)) and desc_sel:
-            cidr = self._cidr_da_interface(desc_sel)
-            if cidr and "/32" not in str(cidr):
-                self._cidr_captura = cidr
-                self.painel_topologia.definir_rede_local(cidr)
-                ip_local = self._mapa_interface_ip.get(desc_sel, ip_local)
-                mascara = self._mapa_interface_mascara.get(desc_sel, mascara)
-
-        if not mascara and cidr:
-            try:
-                import ipaddress
-                mascara = str(ipaddress.ip_network(cidr, strict=False).netmask)
-            except Exception:
-                pass
-
-        if (not cidr or "/32" in str(cidr)) and ip_local:
-            if mascara:
-                tentativa = converter_ip_mascara_para_cidr(ip_local, mascara)
-                if tentativa and "/32" not in tentativa:
-                    cidr = tentativa
-                    self._cidr_captura = cidr
-                    self.painel_topologia.definir_rede_local(cidr)
-        
-        if (not cidr or "/32" in str(cidr)) and ip_local:
-            tentativa = detectar_cidr_robusto(ip_local)
-            if tentativa:
-                cidr = tentativa
-                self._cidr_captura = cidr
-                self.painel_topologia.definir_rede_local(cidr)
-
-        total_local      = self.painel_topologia.total_dispositivos()
-        snap             = getattr(self, "_snapshot_atual", {})
-
-        # ── Testes ──────────────────────────────────────────────────────────────
-
-        # Admin
-        is_admin = False
-        try:
-            is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
-        except Exception:
-            pass
-
-        # Npcap
-        npcap_path = ""
-        npcap_ok   = False
-        if _winreg_ok:
-            try:
-                for hive, path in [
-                    (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Npcap"),
-                    (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Npcap"),
-                ]:
-                    try:
-                        with winreg.OpenKey(hive, path) as k:
-                            try:
-                                npcap_path, _ = winreg.QueryValueEx(k, "")
-                            except Exception:
-                                npcap_path = "Instalado"
-                            npcap_ok = True
-                            break
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-        if not npcap_ok:
-            for dll in [
-                r"C:\Windows\System32\Npcap\wpcap.dll",
-                r"C:\Windows\SysWOW64\wpcap.dll",
-            ]:
-                if os.path.exists(dll):
-                    npcap_ok   = True
-                    npcap_path = os.path.dirname(dll)
-                    break
-
-        # Wi-Fi
-        nome_lower = (nome_dispositivo or desc_sel or "").lower()
-        eh_wifi = any(p in nome_lower for p in ("wi-fi", "wifi", "wireless", "ax", "802.11"))
-
-        # Interface reconhecida pelo Scapy
-        iface_em_scapy = False
-        iface_scapy_label = ""
-        try:
-            from scapy.all import get_if_list
-            lista = get_if_list()
-            # Tenta pelo nome interno (Npcap NPF)
-            iface_em_scapy = nome_dispositivo in lista
-            if not iface_em_scapy and eh_wifi:
-                # Wi-Fi: Scapy usa \Device\NPF_{GUID}, nunca o nome amigável.
-                # Confirma presença verificando se alguma entrada NPF existe.
-                iface_em_scapy = any("NPF_" in i for i in lista)
-                iface_scapy_label = "Wi-Fi usa identificador interno (NPF)"
-            elif iface_em_scapy:
-                iface_scapy_label = "Reconhecida pelo Scapy"
-            else:
-                iface_scapy_label = "Não listada"
-        except Exception:
-            iface_scapy_label = "Não foi possível verificar"
-
-        # CIDR válido (Normalização final para o relatório)
-        cidr_ok = False
-        if cidr and "/" in str(cidr):
-            try:
-                # Se for /32, ainda tentamos um aviso mas mostramos o valor
-                import ipaddress
-                ipaddress.ip_network(cidr, strict=False)
-                cidr_ok = True
-                # Se for /32, forçamos um aviso adicional na UI mas mantemos cidr_ok
-                if "/32" in str(cidr):
-                    pass 
-            except Exception:
-                pass
-
-        # Threads
-        thread_cap_ok  = bool(self.capturador and self.capturador.isRunning())
-        thread_anal_ok = False
-        try:
-            thread_anal_ok = bool(
-                self.analisador._thread and self.analisador._thread.is_alive()
-            )
-        except Exception:
-            pass
-
-        # Filas
-        fila_global_n  = 0
-        fila_entrada_n = 0
-        fila_saida_n   = 0
-        try:
-            fila_global_n  = len(fila_pacotes_global._fila)
-            fila_entrada_n = len(self.analisador._fila_entrada)
-            fila_saida_n   = len(self.analisador._fila_saida)
-        except Exception:
-            pass
-
-        fila_global_pct  = int(fila_global_n  / 20_000 * 100)
-        fila_entrada_pct = int(fila_entrada_n / 20_000 * 100)
-        fila_saida_pct   = int(fila_saida_n   / 5_000  * 100)
-
-        def _cor_fila(pct):
-            return "#2ECC71" if pct < 50 else ("#E67E22" if pct < 80 else "#E74C3C")
-
-        # Pacotes
-        total_pacotes = snap.get("total_pacotes", 0)
-        total_bytes   = snap.get("total_bytes", 0)
-        kb_atual      = getattr(self, "_kb_anterior", 0)
-        cap_ativa     = self.em_captura and thread_cap_ok
-        pacotes_ok    = cap_ativa and total_pacotes > 0
-
-        # Gateway via tabela ARP
-        gateway_ip  = ""
-        gateway_mac = ""
-        try:
-            for entrada in self._obter_tabela_arp_sistema():
-                partes = entrada["ip"].split(".")
-                if len(partes) == 4 and int(partes[-1]) in (1, 254):
-                    gateway_ip  = entrada["ip"]
-                    gateway_mac = entrada["mac"]
-                    break
-        except Exception:
-            pass
-
-        # Param ARP
-        param = (
-            self._param_arps
-            if self._param_arps
-            else self._parametros_iface_seguro(nome_dispositivo)
-        )
-        limite_pps = (
-            _MAX_PACOTES_WIFI_POR_SEGUNDO
-            if eh_wifi else _MAX_PACOTES_POR_SEGUNDO
-        )
-
-        # ── Checklist ──────────────────────────────────────────────────────────
-
-        ok_items  = []
-        avisos    = []
-        problemas = []
-
-        if is_admin:
-            ok_items.append("Executando como Administrador")
-        else:
-            problemas.append("Sem privilégios de Administrador — captura impossível")
-
-        if npcap_ok:
-            ok_items.append(f"Npcap instalado ({npcap_path or 'detectado via DLL'})")
-        else:
-            problemas.append("Npcap não encontrado — instale em npcap.com")
-
-        if desc_sel and "nenhuma" not in desc_sel.lower():
-            ok_items.append(f"Interface selecionada: {desc_sel}")
-        else:
-            problemas.append("Nenhuma interface válida selecionada")
-
-        if iface_em_scapy:
-            ok_items.append(f"Interface verificada no Scapy/Npcap ({iface_scapy_label})")
-        else:
-            avisos.append(f"Interface não reconhecida pelo Scapy — {iface_scapy_label}")
-
-        if cidr_ok:
-            ok_items.append(f"CIDR detectado: {cidr}")
-        else:
-            avisos.append("CIDR não detectado — dispositivos locais podem aparecer como Internet")
-
-        if eh_wifi:
-            ok_items.append("Wi-Fi: modo promíscuo desativado intencionalmente (preserva conectividade)")
-            if not param.get("descoberta_ativa", True):
-                ok_items.append("Wi-Fi: descoberta ativa sem injecao de pacotes (modo laboratorio)")
-        else:
-            ok_items.append("Ethernet: modo promíscuo ativo")
-
-        if cap_ativa:
-            ok_items.append("Thread de captura ativa e responsiva")
-        elif self.em_captura:
-            problemas.append("Thread de captura iniciada mas não está respondendo")
-
-        if self.em_captura:
-            if thread_anal_ok:
-                ok_items.append("Thread de análise de pacotes ativa")
-            else:
-                problemas.append("Thread de análise inativa — eventos não estão sendo processados")
-
-        if pacotes_ok:
-            ok_items.append(f"Pacotes sendo capturados ({total_pacotes:,} total, {kb_atual:.1f} KB/s)")
-        elif self.em_captura and total_pacotes == 0:
-            problemas.append("Nenhum pacote capturado — verifique interface e Npcap")
-
-        if self.em_captura and fila_entrada_pct >= 80:
-            avisos.append(f"Fila de análise quase cheia ({fila_entrada_pct}%) — risco de descarte")
-        elif self.em_captura:
-            ok_items.append(f"Filas dentro do limite (entrada {fila_entrada_pct}%, saída {fila_saida_pct}%)")
-
-        if gateway_ip:
-            ok_items.append(f"Gateway detectado: {gateway_ip} ({gateway_mac})")
-        else:
-            avisos.append("Gateway não visível na tabela ARP do sistema")
-
-        # Score
-        n_prob = len(problemas)
-        n_avi  = len(avisos)
-
-        if n_prob == 0 and n_avi == 0:
-            sc, si, st, sf, sb = "#2ECC71", "", "Tudo funcionando corretamente", "#001a00", "#2ECC71"
-        elif n_prob == 0:
-            sc, si, st, sf, sb = "#E67E22", "", f"Funcionando com {n_avi} aviso(s)", "#1a1000", "#E67E22"
-        else:
-            sc, si, st, sf, sb = "#E74C3C", "", f"{n_prob} problema(s) crítico(s)", "#1a0000", "#E74C3C"
-
-        # ── Helpers HTML ────────────────────────────────────────────────────────
-
-        def secao(titulo, cor):
-            return (
-                f"<div style='margin:14px 0 5px 0;'>"
-                f"<span style='color:{cor};font-weight:bold;font-size:9px;"
-                f"text-transform:uppercase;letter-spacing:1px;'>{titulo}</span>"
-                f"</div>"
-                f"<hr style='border:none;border-top:1px solid {cor}44;margin:0 0 6px 0;'>"
-            )
-
-        def tr(rotulo, valor, cor_v="#ecf0f1", mono=False):
-            f = "font-family:Consolas;" if mono else ""
-            return (
-                f"<tr>"
-                f"<td style='color:#7f8c8d;padding:3px 14px 3px 0;white-space:nowrap;"
-                f"font-size:10px;vertical-align:top;width:140px;'>{rotulo}</td>"
-                f"<td style='color:{cor_v};font-size:10px;{f}'>{valor}</td>"
-                f"</tr>"
-            )
-
-        def check_item(texto, tipo):
-            cfg = {
-                "ok":    ("", "#2ECC71", "#002200"),
-                "warn":  ("",  "#E67E22", "#1f1200"),
-                "error": ("", "#E74C3C", "#200000"),
-            }[tipo]
-            return (
-                f"<div style='background:{cfg[2]};padding:4px 10px;"
-                f"border-left:3px solid {cfg[1]};margin:2px 0;border-radius:0 4px 4px 0;'>"
-                f"<span style='color:{cfg[1]};font-size:10px;'>{cfg[0]} {texto}</span>"
-                f"</div>"
-            )
-
-        def rec_item(icone, cor, texto):
-            return (
-                f"<div style='border-left:3px solid {cor};padding:6px 10px;"
-                f"margin:3px 0;background:{cor}15;border-radius:0 4px 4px 0;'>"
-                f"<span style='color:{cor};font-size:10px;'>{icone} {texto}</span>"
-                f"</div>"
-            )
-
-        # ── HTML ─────────────────────────────────────────────────────────────────
-
-        html = (
-            "<div style='font-family:Arial,sans-serif;font-size:11px;"
-            "line-height:1.6;color:#ecf0f1;'>"
-        )
-
-        # Status geral
-        html += (
-            f"<div style='background:{sf};border:2px solid {sb};"
-            f"border-radius:8px;padding:12px 16px;margin-bottom:14px;'>"
-            f"<span style='color:{sc};font-size:14px;font-weight:bold;'>{si} {st}</span>"
-            f"<span style='color:#566573;font-size:10px;margin-left:12px;'>"
-            f"{len(ok_items)} ok · {n_avi} aviso(s) · {n_prob} problema(s)</span>"
-            f"</div>"
-        )
-
-        # Checklist
-        html += secao("Checklist de Requisitos", "#3498DB")
-        for item in ok_items:
-            html += check_item(item, "ok")
-        for item in avisos:
-            html += check_item(item, "warn")
-        for item in problemas:
-            html += check_item(item, "error")
-
-        # Adaptador
-        html += secao("Adaptador de Rede", "#9B59B6")
-        html += "<table style='width:100%;'>"
-        html += tr("Interface",       desc_sel)
-        html += tr("Dispositivo",     f"<code style='font-size:9px;'>{nome_dispositivo}</code>")
-        html += tr("Tipo",            ("<span style='color:#E67E22;'>Wi-Fi 802.11</span>"
-                                        if eh_wifi else "Ethernet / LAN"))
-        html += tr("Npcap",           (f"<span style='color:#2ECC71;'> {npcap_path or 'Instalado'}</span>"
-                                        if npcap_ok else
-                                        "<span style='color:#E74C3C;'> Não encontrado</span>"))
-        html += tr("Scapy/Npcap",
-                   (f"<span style='color:#2ECC71;'> {iface_scapy_label}</span>"
-                    if iface_em_scapy else
-                    f"<span style='color:#E74C3C;'> {iface_scapy_label}</span>"))
-        html += "</table>"
-
-        # Rede
-        html += secao("Rede", "#2ECC71")
-        html += "<table style='width:100%;'>"
-        html += tr("IP local",  f"<b style='color:#2ECC71;'>{ip_local}</b>")
-        html += tr("Máscara",   mascara or "<span style='color:#E67E22;'>Não detectada</span>")
-        html += tr("CIDR",      (f"<b style='color:#F39C12;'>{cidr}</b>"
-                                   if cidr_ok else
-                                   "<span style='color:#E74C3C;'>Não definido</span>"))
-        html += tr("Gateway",   (f"{gateway_ip} <span style='color:#566573;font-size:9px;'>"
-                                   f"({gateway_mac})</span>"
-                                   if gateway_ip else
-                                   "<span style='color:#7f8c8d;'>Não detectado na tabela ARP</span>"))
-        html += tr("Dispositivos locais", str(total_local))
-        html += "</table>"
-
-        # Captura
-        html += secao("Estado da Captura", "#3498DB")
-        html += "<table style='width:100%;'>"
-        if cap_ativa:
-            html += tr("Estado", "<span style='color:#2ECC71;'> Capturando</span>")
-        elif self.em_captura:
-            html += tr("Estado", "<span style='color:#E74C3C;'> Problema na thread</span>")
-        else:
-            html += tr("Estado", "<span style='color:#7f8c8d;'> Parado</span>")
-
-        html += tr("Modo promíscuo", ("<span style='color:#E67E22;'> Desativado (Wi-Fi)</span>"
-                                       if eh_wifi else
-                                       "<span style='color:#2ECC71;'> Ativo</span>"))
-        html += tr("Rate limit",      f"{limite_pps} pkt/s")
-        html += tr("Admin",           " Sim" if is_admin else " Não")
-
-        if self.em_captura:
-            html += tr("Pacotes",     f"{total_pacotes:,}")
-            html += tr("Dados",       f"{total_bytes / 1_048_576:.2f} MB")
-            html += tr("Taxa atual",  f"{kb_atual:.1f} KB/s")
-            html += tr("Thread captura",
-                       ("<span style='color:#2ECC71;'> Ativa</span>"
-                        if thread_cap_ok else
-                        "<span style='color:#E74C3C;'> Inativa</span>"))
-            html += tr("Thread análise",
-                       ("<span style='color:#2ECC71;'> Ativa</span>"
-                        if thread_anal_ok else
-                        "<span style='color:#E74C3C;'> Inativa</span>"))
-            html += tr("Fila global",
-                       (f"<span style='color:{_cor_fila(fila_global_pct)};'>"
-                        f"{fila_global_n:,} / 20.000 ({fila_global_pct}%)</span>"))
-            html += tr("Fila análise",
-                       (f"<span style='color:{_cor_fila(fila_entrada_pct)};'>"
-                        f"{fila_entrada_n:,} / 20.000 ({fila_entrada_pct}%)</span>"))
-            html += tr("Fila saída",
-                       (f"<span style='color:{_cor_fila(fila_saida_pct)};'>"
-                        f"{fila_saida_n:,} / 5.000 ({fila_saida_pct}%)</span>"))
-
-        html += "</table>"
-
-        # Descoberta ARP
-        html += secao("Descoberta ARP", "#E67E22")
-        html += "<table style='width:100%;'>"
-        descoberta_ativa = param.get("descoberta_ativa", True)
-        html += tr(
-            "Modo",
-            ("<span style='color:#2ECC71;'>Passivo + ARP do sistema</span>"
-             if not descoberta_ativa else
-             "<span style='color:#E67E22;'>ARP sweep ativo</span>")
-        )
-        html += tr("Timer periódico",   f"{param.get('timer_ms', 30000) // 1000}s")
-        html += tr("Batch / lote",      ("Desativado" if not descoberta_ativa else str(param.get('batch', '—'))))
-        html += tr("Pausa entre lotes", ("N/A" if not descoberta_ativa else f"{int(param.get('sleep_lote', 0) * 1000)} ms"))
-        html += tr("Inter-pacote",      ("N/A" if not descoberta_ativa else f"{int(param.get('inter', 0) * 1000)} ms"))
-        html += tr("ICMP",              ("<span style='color:#E67E22;'>Desativado (Wi-Fi)</span>"
-                                          if param.get('desativar_icmp') else
-                                          "<span style='color:#2ECC71;'>Ativo</span>"))
-        html += tr("Limite de hosts",   str(param.get('limite_hosts', '—')))
-        html += "</table>"
-
-        # Recomendações
-        recs = []
-        if not is_admin:
-            recs.append(("", "#E74C3C",
-                         "Execute o NetLab como <b>Administrador</b> para capturar pacotes."))
-        if not npcap_ok:
-            recs.append(("", "#E74C3C",
-                         "Instale o <b>Npcap</b> em npcap.com marcando "
-                         "'WinPcap API-compatible mode'."))
-        if self.em_captura and total_pacotes == 0:
-            recs.append(("", "#E74C3C",
-                         "Nenhum pacote capturado. Tente selecionar outra interface "
-                         "ou execute <code>python diagnostico.py</code> para identificar a interface ativa."))
-        if not cidr_ok and self.em_captura:
-            recs.append(("", "#E67E22",
-                         "CIDR não detectado. Dispositivos da rede podem aparecer como 'Internet'. "
-                         "Reinicie a captura ou verifique com <code>ipconfig /all</code>."))
-        if eh_wifi and self.em_captura:
-            recs.append(("", "#E67E22",
-                         "Para captura mais completa e estável, use <b>cabo Ethernet</b>. "
-                         "Wi-Fi não captura tráfego de outros dispositivos no Windows."))
-        if self.em_captura and fila_entrada_pct >= 80:
-            recs.append(("", "#E67E22",
-                         f"Fila de análise em {fila_entrada_pct}%. Reduza o tráfego "
-                         "ou reinicie a sessão para evitar descarte de pacotes."))
-        if not gateway_ip and self.em_captura:
-            recs.append(("", "#3498DB",
-                         "Gateway não detectado. Execute <code>arp -a</code> no terminal "
-                         "para verificar a tabela ARP do sistema."))
-        if self.em_captura and not thread_anal_ok:
-            recs.append(("", "#E74C3C",
-                         "Thread de análise inativa. Pare e reinicie a captura para restaurar "
-                         "o processamento de eventos."))
-
-        if recs:
-            html += secao("Recomendações", "#F39C12")
-            for icone, cor, texto in recs:
-                html += rec_item(icone, cor, texto)
-
-        # Wi-Fi — estabilidade
-        if eh_wifi:
-            html += secao("Estabilidade em Wi-Fi", "#566573")
-            html += (
-                "<div style='background:#0a0f1a;border:1px solid #1e2d40;"
-                "border-radius:5px;padding:10px 14px;'>"
-                "<ul style='color:#9fb2c8;font-size:10px;margin:0 0 0 14px;line-height:1.9;'>"
-                "<li><b style='color:#ecf0f1;'>Modo promíscuo:</b> permanece desativado no Wi-Fi "
-                "para evitar reset do driver.</li>"
-                "<li><b style='color:#ecf0f1;'>ARP sweep automático:</b> desativado no Wi-Fi. "
-                "O NetLab usa a tabela ARP do Windows e pacotes observados passivamente.</li>"
-                "<li><b style='color:#ecf0f1;'>Npcap:</b> a captura fica em modo passivo; "
-                "nenhum <code>srp()</code> periódico é executado no adaptador Wi-Fi.</li>"
-                "</ul>"
-                "<p style='color:#566573;font-size:9px;margin:8px 0 0 0;'>"
-                " Para enxergar tráfego de outros dispositivos com máxima fidelidade, "
-                "use cabo Ethernet ou espelhamento de porta no switch."
-                "</p></div>"
-            )
-
-        html += "</div>"
-
-        # ── Dialog ───────────────────────────────────────────────────────────────
-
-        dialogo = QDialog(self)
-        dialogo.setWindowTitle("Diagnóstico de Captura v4.1 (Final)")
-        dialogo.setMinimumSize(560, 640)
-        layout_d = QVBoxLayout(dialogo)
-        layout_d.setSpacing(4)
-
-        txt = QTextEdit()
-        txt.setReadOnly(True)
-        txt.setHtml(html)
-        txt.setStyleSheet("QTextEdit { background:#0f1423; border:none; padding:8px; }")
-        layout_d.addWidget(txt)
-
-        row_btn = QHBoxLayout()
-        btn_refresh = QPushButton(" Atualizar")
-        btn_refresh.setToolTip("Roda o diagnóstico novamente com os dados atuais")
-        btn_refresh.clicked.connect(
-            lambda: (dialogo.accept(), self._exibir_diagnostico_captura())
-        )
-        row_btn.addWidget(btn_refresh)
-        row_btn.addStretch()
-        btn_ok = QPushButton("OK")
-        btn_ok.clicked.connect(dialogo.accept)
-        row_btn.addWidget(btn_ok)
-        layout_d.addLayout(row_btn)
-
-        dialogo.exec()
 
     # -------------------------------------------------------------------------
     # Erros e ações gerais
