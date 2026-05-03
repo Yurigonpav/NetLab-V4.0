@@ -387,7 +387,7 @@ class PainelTrafego(QWidget):
         hbox.addWidget(sep)
 
         # Label de posição temporal
-        self._lbl_posicao = QLabel("  ● Ao vivo")
+        self._lbl_posicao = QLabel("  • Ao vivo")
         self._lbl_posicao.setStyleSheet(
             "color:#2ECC71; font-size:10px; font-weight:bold;"
             "background:transparent; border:none;"
@@ -577,7 +577,7 @@ class PainelTrafego(QWidget):
         self.card_dados.definir_valor("0 KB")
 
         if hasattr(self, "_lbl_posicao"):
-            self._lbl_posicao.setText("  ● Ao vivo")
+            self._lbl_posicao.setText("  • Ao vivo")
             self._lbl_posicao.setStyleSheet(
                 "color:#2ECC71; font-size:10px; font-weight:bold;"
                 "background:transparent; border:none;"
@@ -724,7 +724,7 @@ class PainelTrafego(QWidget):
         buf_seg = n % 60
 
         if self._modo == "ao_vivo" or self._nav_offset == 0:
-            texto = f"  ● Ao vivo  ({buf_min:02d}m{buf_seg:02d}s de hist.)"
+            texto = f"  • Ao vivo  ({buf_min:02d}m{buf_seg:02d}s de hist.)"
             cor   = "#2ECC71"
         else:
             atras_min = self._nav_offset // 60

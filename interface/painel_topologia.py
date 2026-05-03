@@ -73,7 +73,7 @@ class PainelDetalhes(QFrame):
 
         # Cabecalho
         cabecalho = QHBoxLayout()
-        self._lbl_tipo_icone = QLabel("●")
+        self._lbl_tipo_icone = QLabel("•")
         self._lbl_tipo_icone.setFont(QFont("Arial", 16))
         self._lbl_titulo = QLabel("Dispositivo")
         self._lbl_titulo.setFont(QFont("Arial", 11, QFont.Weight.Bold))
@@ -127,7 +127,7 @@ class PainelDetalhes(QFrame):
         layout.addStretch()
 
     def exibir(self, ip: str, dados: dict, tipo: str, cor: QColor):
-        self._lbl_tipo_icone.setText("●")
+        self._lbl_tipo_icone.setText("•")
         self._lbl_tipo_icone.setStyleSheet(f"color: {cor.name()};")
         nome = dados.get("alias") or dados.get("hostname") or dados.get("apelido") or ip
         titulo = nome[:22] + "..." if len(nome) > 22 else nome

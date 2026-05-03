@@ -315,7 +315,7 @@ class MotorPedagogico:
         n3 = _tabela(campos)
         n4 = ""
 
-        return self._base(e, "🔍", titulo, "INFO", n1, n2, n3, n4, fluxo)
+        return self._base(e, "", titulo, "INFO", n1, n2, n3, n4, fluxo)
 
     # ────────────────────────────────────────────────────────────────────────
     # HTTP — análise completa com DPI
@@ -572,7 +572,7 @@ class MotorPedagogico:
         else:
             n4 = "<i style='color:#7f8c8d;'>Payload bruto não disponível para este pacote.</i>"
 
-        return self._base(e, "🌐", titulo, nivel, n1, n2, n3, n4, fluxo, alerta)
+        return self._base(e, "", titulo, nivel, n1, n2, n3, n4, fluxo, alerta)
 
     # ────────────────────────────────────────────────────────────────────────
     # HTTPS
@@ -628,7 +628,7 @@ class MotorPedagogico:
         ]
         n3 = _tabela(campos)
 
-        return self._base(e, "🔒", titulo, "INFO", n1, n2, n3, "", fluxo)
+        return self._base(e, "", titulo, "INFO", n1, n2, n3, "", fluxo)
 
     # ────────────────────────────────────────────────────────────────────────
     # ARP — sem alerta para tráfego normal
@@ -684,7 +684,7 @@ class MotorPedagogico:
         n3 = _tabela(campos)
 
         # Sem alerta para ARP normal
-        return self._base(e, "📡", titulo, "INFO", n1, n2, n3, "", fluxo)
+        return self._base(e, "", titulo, "INFO", n1, n2, n3, "", fluxo)
 
     # ────────────────────────────────────────────────────────────────────────
     # TCP SYN
@@ -746,7 +746,7 @@ class MotorPedagogico:
         ]
         n3 = _tabela(campos)
 
-        return self._base(e, "🔗", titulo, "INFO", n1, n2, n3, "", fluxo)
+        return self._base(e, "", titulo, "INFO", n1, n2, n3, "", fluxo)
 
     # ────────────────────────────────────────────────────────────────────────
     # TCP FIN
@@ -782,7 +782,7 @@ class MotorPedagogico:
             ("Flags TCP",  "FIN — encerramento gracioso"),
         ])
 
-        return self._base(e, "🔌", titulo, "INFO", n1, n2, n3, "", fluxo)
+        return self._base(e, "", titulo, "INFO", n1, n2, n3, "", fluxo)
 
     # ────────────────────────────────────────────────────────────────────────
     # TCP RST
@@ -817,7 +817,7 @@ class MotorPedagogico:
             ("Causa",      "Porta fechada ou firewall"),
         ])
 
-        return self._base(e, "⛔", titulo, "INFO", n1, n2, n3, "", fluxo)
+        return self._base(e, "", titulo, "INFO", n1, n2, n3, "", fluxo)
 
     # ────────────────────────────────────────────────────────────────────────
     # ICMP
@@ -869,7 +869,7 @@ class MotorPedagogico:
         ]
         n3 = _tabela(campos)
 
-        return self._base(e, "📶", titulo, "INFO", n1, n2, n3, "", fluxo)
+        return self._base(e, "", titulo, "INFO", n1, n2, n3, "", fluxo)
 
     # ────────────────────────────────────────────────────────────────────────
     # DHCP
@@ -925,7 +925,7 @@ class MotorPedagogico:
         ]
         n3 = _tabela(campos)
 
-        return self._base(e, "🏠", titulo, "INFO", n1, n2, n3, "", fluxo)
+        return self._base(e, "", titulo, "INFO", n1, n2, n3, "", fluxo)
 
     # ────────────────────────────────────────────────────────────────────────
     # SSH — protocolo seguro, sem alerta
@@ -961,7 +961,7 @@ class MotorPedagogico:
             ("Cifrado",    "Sim — SSH"),
         ])
 
-        return self._base(e, "🖥️", titulo, "INFO", n1, n2, n3, "", fluxo)
+        return self._base(e, "", titulo, "INFO", n1, n2, n3, "", fluxo)
 
     # ────────────────────────────────────────────────────────────────────────
     # FTP — protocolo inseguro, AVISO justificado
@@ -1000,7 +1000,7 @@ class MotorPedagogico:
             ("Risco",      "Credenciais e arquivos visíveis na rede"),
         ])
 
-        return self._base(e, "📁", titulo, "AVISO", n1, n2, n3, "", fluxo, alerta)
+        return self._base(e, "", titulo, "AVISO", n1, n2, n3, "", fluxo, alerta)
 
     # ────────────────────────────────────────────────────────────────────────
     # SMB
@@ -1039,7 +1039,7 @@ class MotorPedagogico:
             ("Protocolo",  "SMB (Server Message Block)"),
         ])
 
-        return self._base(e, "📂", titulo, "AVISO", n1, n2, n3, "", fluxo, alerta)
+        return self._base(e, "", titulo, "AVISO", n1, n2, n3, "", fluxo, alerta)
 
     # ────────────────────────────────────────────────────────────────────────
     # RDP
@@ -1080,7 +1080,7 @@ class MotorPedagogico:
             ("Protocolo",  "RDP (Remote Desktop Protocol)"),
         ])
 
-        return self._base(e, "🖥️", titulo, "AVISO", n1, n2, n3, "", fluxo, alerta)
+        return self._base(e, "", titulo, "AVISO", n1, n2, n3, "", fluxo, alerta)
 
     # ────────────────────────────────────────────────────────────────────────
     # Novo dispositivo
@@ -1113,7 +1113,7 @@ class MotorPedagogico:
         ]
         n3 = _tabela(campos)
 
-        return self._base(e, "📱", titulo, "INFO", n1, n2, n3, "", fluxo)
+        return self._base(e, "", titulo, "INFO", n1, n2, n3, "", fluxo)
 
     # ────────────────────────────────────────────────────────────────────────
     # HTTP Credentials (evento específico de credenciais capturadas)
@@ -1170,7 +1170,7 @@ class MotorPedagogico:
         else:
             n4 = ""
 
-        return self._base(e, "🚨", titulo, "CRITICO", n1, n2, n3, n4, fluxo, alerta)
+        return self._base(e, "", titulo, "CRITICO", n1, n2, n3, n4, fluxo, alerta)
 
     # ────────────────────────────────────────────────────────────────────────
     # HTTP Request genérico
@@ -1208,7 +1208,7 @@ class MotorPedagogico:
             ("Tamanho",    f"{tamanho} bytes"),
         ])
 
-        return self._base(e, "📦", titulo, "INFO", n1, n2, n3, "", fluxo)
+        return self._base(e, "", titulo, "INFO", n1, n2, n3, "", fluxo)
 
     # ────────────────────────────────────────────────────────────────────────
     # Resumo de sessão

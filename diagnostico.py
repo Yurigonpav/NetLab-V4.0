@@ -34,7 +34,7 @@ for i, iface in enumerate(interfaces):
             print(f"{qtd} pacote(s) capturado(s) — INTERFACE ATIVA")
             interfaces_com_trafego.append((i, iface, qtd))
         else:
-            print(f"❌ 0 pacotes — interface inativa ou sem tráfego")
+            print(f" 0 pacotes — interface inativa ou sem tráfego")
     except Exception as e:
         print(f"Erro: {e}")
 

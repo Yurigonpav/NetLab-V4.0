@@ -1,4 +1,3 @@
-
 # interface/janela_principal.py
 
 import threading
@@ -25,275 +24,883 @@ import os
 import platform
 from datetime import datetime
 
-# -------------------------------------------------------------------------
-# Diálogo de Diagnóstico Avançado (UI Moderna)
-# -------------------------------------------------------------------------
+# ============================================================================
+# Seção colapsável reutilizável para o diagnóstico
+# ============================================================================
 
 class _SecaoColapsavel(QWidget):
-    def __init__(self, titulo, cor, parent=None, colapsado=False):
+    """
+    Seção com cabeçalho clicável que expande/recolhe o conteúdo interno.
+    """
+    def __init__(self, titulo: str, cor: str, parent=None, colapsado: bool = False):
         super().__init__(parent)
+        self._cor = cor
+
         self.lay = QVBoxLayout(self)
-        self.lay.setContentsMargins(0, 0, 0, 0)
+        self.lay.setContentsMargins(0, 0, 0, 4)
         self.lay.setSpacing(0)
 
-        self.btn = QPushButton(f"▼  {titulo}")
+        # Botão cabeçalho
+        self.btn = QPushButton()
         self.btn.setCheckable(True)
         self.btn.setChecked(not colapsado)
         self.btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._titulo_base = titulo
+        self._atualizar_texto_botao(not colapsado)
         self.btn.setStyleSheet(f"""
             QPushButton {{
-                text-align: left; font-weight: bold; font-size: 11px; color: {cor};
-                background: rgba(255,255,255, 0.03); border: none;
+                text-align: left;
+                font-weight: bold;
+                font-size: 11px;
+                color: {cor};
+                background: rgba(255,255,255, 0.03);
+                border: none;
                 border-bottom: 1px solid rgba(255,255,255, 0.05);
-                padding: 10px 15px; border-radius: 4px;
+                padding: 10px 15px;
+                border-radius: 4px 4px 0 0;
             }}
             QPushButton:hover {{ background: rgba(255,255,255, 0.08); }}
-            QPushButton:checked {{ border-bottom: none; border-radius: 4px 4px 0 0; }}
+            QPushButton:!checked {{ border-radius: 4px; }}
         """)
-        self.btn.clicked.connect(self._toggle)
+        self.btn.toggled.connect(self._ao_alternar)
 
+        # Container interno
         self.container = QFrame()
         self.container.setStyleSheet("""
-            QFrame { background: rgba(0,0,0, 0.1); border: 1px solid rgba(255,255,255, 0.05);
-                     border-top: none; border-radius: 0 0 4px 4px; }
+            QFrame {
+                background: rgba(0,0,0, 0.12);
+                border: 1px solid rgba(255,255,255, 0.05);
+                border-top: none;
+                border-radius: 0 0 4px 4px;
+            }
         """)
         self.c_lay = QVBoxLayout(self.container)
-        self.c_lay.setContentsMargins(12, 8, 12, 12)
-        
+        self.c_lay.setContentsMargins(12, 10, 12, 12)
+        self.c_lay.setSpacing(4)
+
         self.lay.addWidget(self.btn)
         self.lay.addWidget(self.container)
-        
+
         if colapsado:
             self.container.hide()
-            self.btn.setText(f"▶  {titulo}")
 
-    def _toggle(self):
-        visivel = self.btn.isChecked()
-        self.container.setVisible(visivel)
-        txt = self.btn.text()[3:]
-        self.btn.setText(( "▼  " if visivel else "▶  " ) + txt)
+    def _atualizar_texto_botao(self, expandido: bool):
+        seta = "" if expandido else ""
+        self.btn.setText(f"{seta}   {self._titulo_base}")
 
-    def add_widget(self, w):
-        self.c_lay.addWidget(w)
+    def _ao_alternar(self, ativo: bool):
+        self.container.setVisible(ativo)
+        self._atualizar_texto_botao(ativo)
+
+    def add_widget(self, widget: QWidget):
+        self.c_lay.addWidget(widget)
+
+    def add_layout(self, layout):
+        self.c_lay.addLayout(layout)
+
+
+# ============================================================================
+# Diálogo de Diagnóstico Avançado — totalmente refatorado
+# ============================================================================
 
 class DiagnosticoAvançado(QDialog):
-    def __init__(self, main_window):
-        super().__init__(main_window)
-        self.main = main_window
-        self.setWindowTitle("Diagnóstico de Captura e Rede")
-        self.setMinimumSize(620, 780)
-        
-        self._ACCENT = "#3d9fd3"
-        self._OK     = "#2ecc71"
-        self._AVISO  = "#e67e22"
-        self._ERRO   = "#e74c3c"
-        self._BG     = "#0a0e1a"
+    """
+    Painel de diagnóstico completo do NetLab Educacional.
 
-        self._setup_ui()
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.atualizar)
-        self.atualizar()
+    Verifica e exibe:
+      - Privilégios de administrador
+      - Versão do Npcap e do Scapy
+      - Teste de ping ao gateway com latência real
+      - Teste de resolução DNS com tempo de resposta
+      - Sinal Wi-Fi (RSSI em %) e qualidade
+      - Estatísticas da interface (pacotes, drops, erros via psutil)
+      - Fila interna do analisador e eventos pendentes
+      - Auto-refresh configurável a cada 3 segundos
+      - Exportação completa para arquivo .txt
+    """
 
-    def _setup_ui(self):
+    # Paleta de cores interna
+    _COR_OK    = "#2ecc71"
+    _COR_AVISO = "#e67e22"
+    _COR_ERRO  = "#e74c3c"
+    _COR_INFO  = "#3d9fd3"
+    _COR_BG    = "#0a0e1a"
+    _COR_SURF  = "#111827"
+    _COR_TEXTO = "#ecf0f1"
+    _COR_DIM   = "#7f8c8d"
+
+    def __init__(self, janela_principal):
+        super().__init__(janela_principal)
+        self.main = janela_principal
+        self.setWindowTitle("Diagnóstico do Sistema — NetLab Educacional")
+        self.setMinimumSize(600, 500)
+        self.resize(680, 750)
+
+        # Cache dos resultados para exportação
+        self._ultimo_relatorio: dict = {}
+
+        self._construir_ui()
+
+        # Timer de auto-refresh
+        self._timer_auto = QTimer(self)
+        self._timer_auto.timeout.connect(self.atualizar)
+
+        # Primeira atualização ao abrir
+        QTimer.singleShot(100, self.atualizar)
+
+    # ── Construção da interface ──────────────────────────────────────────
+
+    def _construir_ui(self):
         self.setStyleSheet(f"""
-            QDialog {{ background: {self._BG}; color: #ecf0f1; }}
-            QLabel {{ color: #ecf0f1; }}
+            QDialog {{
+                background: {self._COR_BG};
+                color: {self._COR_TEXTO};
+            }}
+            QLabel {{ color: {self._COR_TEXTO}; background: transparent; }}
+            QCheckBox {{ color: {self._COR_DIM}; font-size: 11px; }}
             QPushButton {{
-                background: #1a2540; color: #dde6f0; border: 1px solid #243352;
-                border-radius: 4px; padding: 6px 14px; font-size: 11px;
+                background: #1a2540;
+                color: #dde6f0;
+                border: 1px solid #243352;
+                border-radius: 5px;
+                padding: 6px 16px;
+                font-size: 11px;
             }}
             QPushButton:hover {{ background: #243352; }}
+            QScrollBar:vertical {{
+                background: {self._COR_BG}; width: 6px; border-radius: 3px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: #2c3e50; border-radius: 3px; min-height: 20px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
         """)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
 
-        header = QHBoxLayout()
-        v_head = QVBoxLayout()
-        lbl_t = QLabel("DIAGNÓSTICO DO SISTEMA")
-        lbl_t.setStyleSheet("font-size: 16px; font-weight: bold; letter-spacing: 1px;")
-        self.lbl_ts = QLabel("Gerado em: --:--:--")
-        self.lbl_ts.setStyleSheet("color: #7f8c8d; font-size: 10px;")
-        v_head.addWidget(lbl_t)
-        v_head.addWidget(self.lbl_ts)
-        header.addLayout(v_head)
-        header.addStretch()
-        
-        v_saude = QVBoxLayout()
-        self.lbl_saude = QLabel("Saúde: --/--")
-        self.lbl_saude.setStyleSheet("font-size: 10px; font-weight: bold;")
-        self.bar_saude = QProgressBar()
-        self.bar_saude.setFixedHeight(8)
-        self.bar_saude.setTextVisible(False)
-        self.bar_saude.setStyleSheet(f"""
-            QProgressBar {{ background: #1a2540; border-radius: 4px; border: none; }}
-            QProgressBar::chunk {{ background: {self._OK}; border-radius: 4px; }}
-        """)
-        v_saude.addWidget(self.lbl_saude)
-        v_saude.addWidget(self.bar_saude)
-        header.addLayout(v_saude)
-        layout.addLayout(header)
+        raiz = QVBoxLayout(self)
+        raiz.setContentsMargins(20, 20, 20, 16)
+        raiz.setSpacing(14)
 
+        # ── Cabeçalho ──────────────────────────────────────────────────
+        raiz.addWidget(self._montar_cabecalho())
+
+        # ── Área de rolagem com seções ──────────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self.container = QWidget()
-        self.v_cont = QVBoxLayout(self.container)
-        self.v_cont.setContentsMargins(0, 0, 0, 0)
-        self.v_cont.setSpacing(10)
-        scroll.setWidget(self.container)
-        layout.addWidget(scroll)
+        self._container_secoes = QWidget()
+        self._container_secoes.setStyleSheet("background: transparent;")
+        self._layout_secoes = QVBoxLayout(self._container_secoes)
+        self._layout_secoes.setContentsMargins(0, 0, 0, 0)
+        self._layout_secoes.setSpacing(8)
+        self._layout_secoes.addStretch()
+        scroll.setWidget(self._container_secoes)
+        raiz.addWidget(scroll, 1)
 
-        footer = QHBoxLayout()
-        self.chk_auto = QCheckBox("Auto-atualizar (3s)")
-        self.chk_auto.setStyleSheet("color: #7f8c8d; font-size: 11px;")
-        self.chk_auto.toggled.connect(lambda a: self.timer.start(3000) if a else self.timer.stop())
-        footer.addWidget(self.chk_auto)
-        footer.addStretch()
-        
-        btn_exp = QPushButton("Exportar .txt")
-        btn_exp.clicked.connect(self.exportar)
-        footer.addWidget(btn_exp)
-        
-        btn_upd = QPushButton("Atualizar")
-        btn_upd.clicked.connect(self.atualizar)
-        footer.addWidget(btn_upd)
-        
-        btn_ok = QPushButton("Fechar")
-        btn_ok.clicked.connect(self.accept)
-        btn_ok.setStyleSheet(f"background: {self._ACCENT}; color: white; font-weight: bold;")
-        footer.addWidget(btn_ok)
-        layout.addLayout(footer)
+        # ── Rodapé ──────────────────────────────────────────────────────
+        raiz.addLayout(self._montar_rodape())
+
+    def _montar_cabecalho(self) -> QFrame:
+        frame = QFrame()
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background: {self._COR_SURF};
+                border: 1px solid #1e2d40;
+                border-radius: 10px;
+                padding: 4px;
+            }}
+        """)
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(10)
+
+        # Linha superior: título + timestamp
+        linha_top = QHBoxLayout()
+        lbl_titulo = QLabel("DIAGNÓSTICO DO SISTEMA")
+        lbl_titulo.setStyleSheet(
+            "font-size: 15px; font-weight: bold; letter-spacing: 1px; color: #ecf0f1;"
+        )
+        linha_top.addWidget(lbl_titulo)
+        linha_top.addStretch()
+        self._lbl_timestamp = QLabel("Gerado em: --:--:--")
+        self._lbl_timestamp.setStyleSheet(f"color: {self._COR_DIM}; font-size: 10px;")
+        linha_top.addWidget(self._lbl_timestamp)
+        lay.addLayout(linha_top)
+
+        # Linha da barra de saúde
+        linha_saude = QHBoxLayout()
+        linha_saude.setSpacing(10)
+        self._lbl_saude = QLabel("Verificando…")
+        self._lbl_saude.setFixedWidth(130)
+        self._lbl_saude.setStyleSheet("font-size: 11px; font-weight: bold;")
+        linha_saude.addWidget(self._lbl_saude)
+
+        self._barra_saude = QProgressBar()
+        self._barra_saude.setRange(0, 10)
+        self._barra_saude.setValue(0)
+        self._barra_saude.setFixedHeight(14)
+        self._barra_saude.setTextVisible(False)
+        self._barra_saude.setStyleSheet("""
+            QProgressBar {
+                background: #1a2540;
+                border-radius: 7px;
+                border: none;
+            }
+            QProgressBar::chunk {
+                background: #2ecc71;
+                border-radius: 7px;
+            }
+        """)
+        linha_saude.addWidget(self._barra_saude, 1)
+
+        self._lbl_placar = QLabel("0 / 0")
+        self._lbl_placar.setFixedWidth(48)
+        self._lbl_placar.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._lbl_placar.setStyleSheet(f"color: {self._COR_DIM}; font-family: Consolas; font-size: 10px;")
+        linha_saude.addWidget(self._lbl_placar)
+        lay.addLayout(linha_saude)
+
+        return frame
+
+    def _montar_rodape(self) -> QHBoxLayout:
+        lay = QHBoxLayout()
+        lay.setSpacing(8)
+
+        self._chk_auto = QCheckBox("Atualizar a cada 3 s")
+        self._chk_auto.toggled.connect(self._ao_alternar_auto_refresh)
+        lay.addWidget(self._chk_auto)
+        lay.addStretch()
+
+        btn_exportar = QPushButton("Exportar .txt")
+        btn_exportar.setToolTip("Salva o relatório completo em arquivo de texto")
+        btn_exportar.clicked.connect(self._exportar_relatorio)
+        lay.addWidget(btn_exportar)
+
+        btn_atualizar = QPushButton("Atualizar")
+        btn_atualizar.clicked.connect(self.atualizar)
+        lay.addWidget(btn_atualizar)
+
+        btn_fechar = QPushButton("Fechar")
+        btn_fechar.setStyleSheet(
+            f"background: {self._COR_INFO}; color: white; font-weight: bold;"
+            "border-radius: 5px; padding: 6px 16px;"
+        )
+        btn_fechar.clicked.connect(self.accept)
+        lay.addWidget(btn_fechar)
+
+        return lay
+
+    # ── Atualização principal ────────────────────────────────────────────
 
     def atualizar(self):
-        while self.v_cont.count():
-            w = self.v_cont.takeAt(0).widget()
-            if w: w.deleteLater()
-            
-        main = self.main
-        desc_sel = main.combo_interface.currentText()
-        nome_iface = main._mapa_interface_nome.get(desc_sel, desc_sel)
-        ip_l = main._mapa_interface_ip.get(desc_sel, obter_ip_local())
-        
-        # Testes
-        is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
-        npcap_v = self._get_npcap_version()
-        gateway = self._get_gateway_ip()
-        ping_res, ping_ok = self._ping(gateway) if gateway else ("N/A", False)
-        dns_res, dns_ok = self._test_dns()
-        
-        # Checklist
-        sec_check = _SecaoColapsavel("Checklist de Saúde", self._ACCENT)
-        self.v_cont.addWidget(sec_check)
-        html = "<div>"
-        html += self._fmt_item("Administrador: Ativo" if is_admin else "Administrador: Inativo", "ok" if is_admin else "err")
-        html += self._fmt_item(f"Npcap: {npcap_v}", "ok" if npcap_v != "N/A" else "err")
-        html += self._fmt_item(f"DNS: {dns_res}", "ok" if dns_ok else "warn")
-        if gateway: html += self._fmt_item(f"Gateway ({gateway}): {ping_res}", "ok" if ping_ok else "warn")
+        """Recolhe todos os dados e reconstrói as seções do diagnóstico."""
+        self._lbl_timestamp.setText(f"Gerado em: {datetime.now().strftime('%H:%M:%S')}")
+
+        # Coleta de dados
+        desc_interface = self.main.combo_interface.currentText()
+        nome_iface     = self.main._mapa_interface_nome.get(desc_interface, desc_interface)
+        ip_local       = self.main._mapa_interface_ip.get(desc_interface, "") or _obter_ip_local_seguro()
+        eh_wifi        = any(p in nome_iface.lower() for p in ("wi-fi", "wifi", "wireless", "ax", "802.11"))
+        eh_admin       = self._verificar_admin()
+        versao_npcap   = self._versao_npcap()
+        versao_scapy   = self._versao_scapy()
+        info_dns        = self._testar_dns()
+        info_gateway   = self._testar_ping_gateway()
+        info_wifi      = self._sinal_wifi() if eh_wifi else None
+        info_iface     = self._stats_interface(nome_iface)
+        snap           = self.main._snapshot_atual
+
+        # Monta relatorio para exportação
+        self._ultimo_relatorio = {
+            "timestamp":     datetime.now().isoformat(),
+            "interface":     desc_interface,
+            "nome_iface":    nome_iface,
+            "ip_local":      ip_local,
+            "eh_admin":      eh_admin,
+            "versao_npcap":  versao_npcap,
+            "versao_scapy":  versao_scapy,
+            "dns":           info_dns,
+            "gateway":       info_gateway,
+            "wifi":          info_wifi,
+            "iface":         info_iface,
+            "snap":          snap,
+        }
+
+        # Calcula pontuação de saúde
+        pontos_total    = 0
+        pontos_obtidos  = 0
+        problemas       = []
+        avisos          = []
+
+        def _checar(condicao: bool, peso: int, problema: str, aviso: str = ""):
+            nonlocal pontos_total, pontos_obtidos
+            pontos_total += peso
+            if condicao:
+                pontos_obtidos += peso
+            elif aviso:
+                avisos.append(aviso)
+            else:
+                problemas.append(problema)
+
+        _checar(eh_admin,                    3, "Executar como Administrador")
+        _checar(versao_npcap != "N/A",       3, "Npcap não instalado ou não detectado")
+        _checar(versao_scapy != "N/A",       1, "Scapy não instalado")
+        _checar(info_dns["ok"],              1, "Resolução DNS falhou", "DNS lento" if info_dns["ok"] else "")
+        _checar(info_gateway["ok"],          1, "Gateway inacessível", "Latência alta ao gateway" if info_gateway.get("latencia_ms", 0) > 50 else "")
+        _checar(info_iface.get("drops", 0) == 0, 1, "",
+                f"Drops detectados: {info_iface.get('drops', 0)} pacotes" if info_iface.get("drops", 0) > 0 else "")
+
+        # Reconstrói seções
+        self._limpar_secoes()
+
+        self._adicionar_secao_checklist(eh_admin, versao_npcap, versao_scapy,
+                                         info_dns, info_gateway)
+        self._adicionar_secao_interface(desc_interface, nome_iface, ip_local,
+                                         eh_wifi, info_iface, snap)
+        if eh_wifi:
+            self._adicionar_secao_wifi(info_wifi)
+        self._adicionar_secao_versoes(versao_npcap, versao_scapy)
+        self._adicionar_secao_rede(info_dns, info_gateway)
+        if avisos or problemas:
+            self._adicionar_secao_pendencias(problemas, avisos)
+
+        # Atualiza barra de saúde com cor dinâmica
+        self._barra_saude.setMaximum(pontos_total)
+        self._barra_saude.setValue(pontos_obtidos)
+        proporcao = pontos_obtidos / max(pontos_total, 1)
+        if proporcao >= 0.8:
+            cor_chunk = self._COR_OK
+            status = "Sistema saudável"
+        elif proporcao >= 0.5:
+            cor_chunk = self._COR_AVISO
+            status = "Atenção necessária"
+        else:
+            cor_chunk = self._COR_ERRO
+            status = "Problemas encontrados"
+
+        self._barra_saude.setStyleSheet(f"""
+            QProgressBar {{
+                background: #1a2540; border-radius: 7px; border: none;
+            }}
+            QProgressBar::chunk {{
+                background: {cor_chunk}; border-radius: 7px;
+            }}
+        """)
+        self._lbl_saude.setText(status)
+        self._lbl_saude.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {cor_chunk};")
+        self._lbl_placar.setText(f"{pontos_obtidos} / {pontos_total}")
+
+    # ── Construção das seções ────────────────────────────────────────────
+
+    def _limpar_secoes(self):
+        """Remove todas as seções existentes antes de reconstruir."""
+        while self._layout_secoes.count() > 1:
+            item = self._layout_secoes.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+    def _adicionar_secao_checklist(self, eh_admin, versao_npcap, versao_scapy,
+                                     info_dns, info_gateway):
+        secao = _SecaoColapsavel("  Checklist Rápido", self._COR_INFO)
+
+        itens_html = "<div style='line-height:1.9;'>"
+        itens_html += self._item_check(eh_admin, "Privilégios de Administrador",
+                                        "Execute via 'Executar como Administrador'" if not eh_admin else "")
+        itens_html += self._item_check(versao_npcap != "N/A",
+                                        f"Npcap: {versao_npcap}",
+                                        "Instale em npcap.com com 'WinPcap API-compatible mode'" if versao_npcap == "N/A" else "")
+        itens_html += self._item_check(versao_scapy != "N/A",
+                                        f"Scapy: {versao_scapy}",
+                                        "pip install scapy" if versao_scapy == "N/A" else "")
+        itens_html += self._item_check(info_dns["ok"],
+                                        f"DNS: {info_dns['texto']}",
+                                        "Verifique conexão com a internet" if not info_dns["ok"] else "")
+        itens_html += self._item_check(info_gateway["ok"],
+                                        f"Gateway: {info_gateway['texto']}",
+                                        "Roteador inacessível" if not info_gateway["ok"] else "")
+        itens_html += "</div>"
+
+        lbl = QLabel(itens_html)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("font-size: 11px;")
+        secao.add_widget(lbl)
+        self._inserir_secao(secao)
+
+    def _adicionar_secao_interface(self, desc, nome, ip, eh_wifi, info_iface, snap):
+        secao = _SecaoColapsavel("  Interface e Estatísticas", "#9B59B6")
+
+        total_bytes   = snap.get("total_bytes", 0)
+        total_pacotes = snap.get("total_pacotes", 0)
+        kb = total_bytes / 1024
+
+        linhas = [
+            ("Interface selecionada", desc),
+            ("Nome do dispositivo",   nome or "—"),
+            ("IP local",              ip or "—"),
+            ("Tipo",                  "Wi-Fi / Wireless" if eh_wifi else "Cabeado / Ethernet"),
+            ("Pacotes capturados",    f"{total_pacotes:,}"),
+            ("Volume total",          f"{kb/1024:.2f} MB" if kb > 1024 else f"{kb:.1f} KB"),
+        ]
+
+        # Adiciona contadores de erro/drop se psutil disponível
+        if info_iface.get("disponivel"):
+            drops   = info_iface.get("drops", 0)
+            erros   = info_iface.get("erros", 0)
+            cor_drop = self._COR_ERRO if drops > 0 else self._COR_OK
+            cor_err  = self._COR_ERRO if erros > 0 else self._COR_OK
+            linhas.append(("Pacotes descartados",
+                            f"<span style='color:{cor_drop};'>{drops}</span>" +
+                            ("  pacotes perdidos antes do Npcap" if drops > 0 else " ")))
+            linhas.append(("Erros de recepção",
+                            f"<span style='color:{cor_err};'>{erros}</span>" +
+                            ("  verifique o driver da placa" if erros > 0 else " ")))
+        else:
+            linhas.append(("Drops/Erros",
+                            "<span style='color:#7f8c8d;'>Instale psutil para monitorar (pip install psutil)</span>"))
+
+        lbl = QLabel(self._tabela_html(linhas))
+        lbl.setWordWrap(True)
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+        secao.add_widget(lbl)
+        self._inserir_secao(secao)
+
+    def _adicionar_secao_wifi(self, info_wifi):
+        secao = _SecaoColapsavel("  Sinal Wi-Fi", self._COR_AVISO, colapsado=False)
+
+        if info_wifi and info_wifi.get("disponivel"):
+            sinal_pct = info_wifi.get("sinal_pct", 0)
+            ssid      = info_wifi.get("ssid", "—")
+            bssid     = info_wifi.get("bssid", "—")
+            canal     = info_wifi.get("canal", "—")
+            velocidade= info_wifi.get("velocidade", "—")
+
+            if sinal_pct >= 70:
+                cor_sinal = self._COR_OK
+                qualidade = "Excelente"
+            elif sinal_pct >= 45:
+                cor_sinal = self._COR_AVISO
+                qualidade = "Bom"
+            else:
+                cor_sinal = self._COR_ERRO
+                qualidade = "Fraco — captura pode ser instável"
+
+            linhas = [
+                ("SSID",          ssid),
+                ("BSSID",         bssid),
+                ("Sinal",         f"<span style='color:{cor_sinal};'>{sinal_pct}% — {qualidade}</span>"),
+                ("Canal",         str(canal)),
+                ("Velocidade",    velocidade),
+            ]
+
+            # Aviso importante sobre modo promíscuo em Wi-Fi
+            aviso_html = (
+                "<div style='margin-top:8px; background:rgba(230,126,34,0.1); "
+                "border-left:3px solid #e67e22; padding:8px 10px; border-radius:4px; "
+                "font-size:10px; color:#e67e22;'>"
+                "<b>Limitação Wi-Fi:</b> no Windows, o driver impede a captura de frames "
+                "de outros dispositivos em modo promíscuo. Para demonstração em sala, "
+                "use o <b>Hotspot do Windows</b> e conecte os colegas nele."
+                "</div>"
+            )
+
+            conteudo = QLabel(self._tabela_html(linhas) + aviso_html)
+            conteudo.setWordWrap(True)
+            conteudo.setTextFormat(Qt.TextFormat.RichText)
+        else:
+            conteudo = QLabel(
+                "<span style='color:#7f8c8d;'>Dados de sinal não disponíveis. "
+                "Verifique se a interface Wi-Fi está ativa.</span>"
+            )
+        secao.add_widget(conteudo)
+        self._inserir_secao(secao)
+
+    def _adicionar_secao_versoes(self, versao_npcap, versao_scapy):
+        secao = _SecaoColapsavel("  Versões dos Componentes", "#16A085", colapsado=True)
+
+        linhas = [
+            ("Python",  platform.python_version()),
+            ("Npcap",   versao_npcap),
+            ("Scapy",   versao_scapy),
+            ("PyQt6",   self._versao_pyqt6()),
+            ("Sistema", f"{platform.system()} {platform.release()} ({platform.machine()})"),
+        ]
+        lbl = QLabel(self._tabela_html(linhas))
+        lbl.setWordWrap(True)
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+        secao.add_widget(lbl)
+        self._inserir_secao(secao)
+
+    def _adicionar_secao_rede(self, info_dns, info_gateway):
+        secao = _SecaoColapsavel("  Conectividade de Rede", self._COR_INFO)
+
+        linhas = []
+
+        # Gateway
+        cor_gw = self._COR_OK if info_gateway["ok"] else self._COR_ERRO
+        linhas.append(("Ping ao gateway",
+                        f"<span style='color:{cor_gw};'>{info_gateway['texto']}</span>"))
+
+        # Detalhes do ping
+        if info_gateway.get("latencia_ms") is not None:
+            lat = info_gateway["latencia_ms"]
+            cor_lat = self._COR_OK if lat < 10 else (self._COR_AVISO if lat < 50 else self._COR_ERRO)
+            linhas.append(("Latência",
+                            f"<span style='color:{cor_lat};'>{lat} ms</span>"))
+
+        # DNS
+        cor_dns = self._COR_OK if info_dns["ok"] else self._COR_ERRO
+        linhas.append(("Resolução DNS",
+                        f"<span style='color:{cor_dns};'>{info_dns['texto']}</span>"))
+
+        if info_dns.get("tempo_ms") is not None:
+            t = info_dns["tempo_ms"]
+            cor_t = self._COR_OK if t < 50 else (self._COR_AVISO if t < 200 else self._COR_ERRO)
+            linhas.append(("Tempo DNS",
+                            f"<span style='color:{cor_t};'>{t} ms</span>"))
+
+        lbl = QLabel(self._tabela_html(linhas))
+        lbl.setWordWrap(True)
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+        secao.add_widget(lbl)
+        self._inserir_secao(secao)
+
+    def _adicionar_secao_pendencias(self, problemas, avisos):
+        secao = _SecaoColapsavel("  Pendências Detectadas", self._COR_AVISO)
+        html = "<div style='line-height:2.0;'>"
+        for p in problemas:
+            html += (f"<div style='color:{self._COR_ERRO}; font-size:11px;'>"
+                     f" &nbsp;{p}</div>")
+        for a in avisos:
+            html += (f"<div style='color:{self._COR_AVISO}; font-size:11px;'>"
+                     f" &nbsp;{a}</div>")
         html += "</div>"
-        lbl = QLabel(); lbl.setText(html); sec_check.add_widget(lbl)
-        
-        # Stats
-        sec_stats = _SecaoColapsavel("Estatísticas e Interface", "#9B59B6")
-        self.v_cont.addWidget(sec_stats)
-        p = main._snapshot_atual.get("total_pacotes", 0)
-        b = main._snapshot_atual.get("total_bytes", 0)
-        eh_wifi = any(x in (nome_iface or "").lower() for x in ("wi-fi", "wifi", "wireless"))
-        
-        stats_html = f"<table style='width:100%; color:#ecf0f1; font-size:10px;'>"
-        stats_html += f"<tr><td>Interface</td><td>{desc_sel}</td></tr>"
-        stats_html += f"<tr><td>IP Local</td><td>{ip_l}</td></tr>"
-        stats_html += f"<tr><td>Pacotes</td><td>{p:,}</td></tr>"
-        stats_html += f"<tr><td>Tráfego</td><td>{formatar_bytes(b)}</td></tr>"
-        if eh_wifi:
-            sig, sok = self._get_wifi_signal()
-            stats_html += f"<tr><td>Sinal Wi-Fi</td><td style='color:{self._OK if sok else self._AVISO}'>{sig}</td></tr>"
-        
-        errs = self._get_iface_errors(nome_iface)
-        if errs and errs['dropin'] > 0:
-            stats_html += f"<tr><td>Drops</td><td style='color:{self._ERRO}'>{errs['dropin']} pkt</td></tr>"
-        stats_html += "</table>"
-        lbl_s = QLabel(); lbl_s.setText(stats_html); sec_stats.add_widget(lbl_s)
+        lbl = QLabel(html)
+        lbl.setWordWrap(True)
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+        secao.add_widget(lbl)
+        self._inserir_secao(secao)
 
-        # Wi-Fi Estabilidade
-        if eh_wifi:
-            sec_wifi = _SecaoColapsavel("Estabilidade em Wi-Fi", "#566573", colapsado=True)
-            self.v_cont.addWidget(sec_wifi)
-            lbl_w = QLabel("No modo Wi-Fi, o motor desativa o modo promíscuo e a descoberta ativa agressiva para garantir conectividade.")
-            lbl_w.setWordWrap(True); lbl_w.setStyleSheet("color: #7f8c8d; font-size: 10px;")
-            sec_wifi.add_widget(lbl_w)
+    def _inserir_secao(self, secao: _SecaoColapsavel):
+        """Insere a seção antes do stretch final."""
+        pos = max(0, self._layout_secoes.count() - 1)
+        self._layout_secoes.insertWidget(pos, secao)
 
-        self.v_cont.addStretch()
-        
-        # Barra saude
-        total = 4; passed = (1 if is_admin else 0) + (1 if npcap_v != "N/A" else 0) + (1 if dns_ok else 0) + (1 if ping_ok else 0)
-        self.bar_saude.setMaximum(total); self.bar_saude.setValue(passed)
-        self.lbl_saude.setText(f"Saúde: {passed}/{total}")
-        self.lbl_ts.setText(f"Gerado em: {datetime.now().strftime('%H:%M:%S')}")
+    # ── Funções de coleta de dados ───────────────────────────────────────
 
-    def _fmt_item(self, t, tipo):
-        c = self._OK if tipo == "ok" else (self._AVISO if tipo == "warn" else self._ERRO)
-        return f"<div style='color:{c}; padding:3px; margin:1px; border-left:2px solid {c}; font-size:10px;'>&nbsp;{t}</div>"
+    def _verificar_admin(self) -> bool:
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
 
-    def _get_npcap_version(self):
+    def _versao_npcap(self) -> str:
+        """Lê a versão do Npcap do registro do Windows."""
         try:
             import winreg
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Npcap") as k:
-                return winreg.QueryValueEx(k, "")[0] or "Sim"
-        except: return "N/A"
+            chaves_candidatas = [
+                r"SOFTWARE\Npcap",
+                r"SOFTWARE\WOW6432Node\Npcap",
+            ]
+            for chave in chaves_candidatas:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, chave) as k:
+                        versao, _ = winreg.QueryValueEx(k, "")
+                        if versao:
+                            return str(versao).strip() or "Instalado"
+                except FileNotFoundError:
+                    continue
+        except ImportError:
+            pass
+        # Fallback: verifica pela DLL do Npcap
+        dll_path = r"C:\Windows\System32\Npcap\wpcap.dll"
+        if os.path.exists(dll_path):
+            return "Instalado (versão não detectada)"
+        return "N/A"
 
-    def _get_gateway_ip(self):
+    def _versao_scapy(self) -> str:
         try:
-            for e in self.main._obter_tabela_arp_sistema():
-                if e['ip'].split('.')[-1] in ('1', '254'): return e['ip']
-        except: pass
+            import scapy
+            return getattr(scapy, "VERSION", None) or scapy.__version__
+        except Exception:
+            return "N/A"
+
+    def _versao_pyqt6(self) -> str:
+        try:
+            from PyQt6.QtCore import PYQT_VERSION_STR
+            return PYQT_VERSION_STR
+        except Exception:
+            return "N/A"
+
+    def _testar_ping_gateway(self) -> dict:
+        """
+        Faz ping real ao gateway local (último octeto .1 ou .254 na tabela ARP).
+        Retorna dicionário com ok, texto, latencia_ms.
+        """
+        gateway = self._descobrir_gateway()
+        if not gateway:
+            return {"ok": False, "texto": "Gateway não detectado", "latencia_ms": None}
+        try:
+            resultado = subprocess.run(
+                ["ping", "-n", "3", "-w", "800", gateway],
+                capture_output=True,
+                text=True,
+                timeout=6,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            saida = resultado.stdout
+
+            # Extrai latência média
+            m_media = re.search(r"M[eé]dia\s*=\s*(\d+)\s*ms", saida, re.IGNORECASE)
+            if not m_media:
+                m_media = re.search(r"Average\s*=\s*(\d+)ms", saida, re.IGNORECASE)
+
+            # Verifica perda
+            m_perda = re.search(r"(\d+)%\s+(?:de\s+perda|loss)", saida, re.IGNORECASE)
+            perda_pct = int(m_perda.group(1)) if m_perda else 100
+
+            if resultado.returncode == 0 and perda_pct < 100:
+                lat = int(m_media.group(1)) if m_media else 0
+                texto = f"{gateway} — {lat} ms · {perda_pct}% perda"
+                return {"ok": True, "texto": texto, "latencia_ms": lat, "gateway": gateway}
+            else:
+                return {
+                    "ok": False,
+                    "texto": f"{gateway} — sem resposta ({perda_pct}% perda)",
+                    "latencia_ms": None,
+                    "gateway": gateway,
+                }
+        except Exception as e:
+            return {"ok": False, "texto": f"Erro no ping: {e}", "latencia_ms": None}
+
+    def _descobrir_gateway(self) -> str:
+        """Tenta encontrar o IP do gateway via tabela ARP do sistema."""
+        try:
+            saida = subprocess.check_output(
+                ["arp", "-a"],
+                text=True,
+                timeout=4,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            for linha in saida.splitlines():
+                m = re.search(r'(\d+\.\d+\.\d+\.(?:1|254))\s+', linha)
+                if m:
+                    return m.group(1)
+        except Exception:
+            pass
+
+        # Fallback: route print
+        try:
+            saida = subprocess.check_output(
+                ["route", "print", "0.0.0.0"],
+                text=True,
+                timeout=4,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            m = re.search(r'\s+0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)', saida)
+            if m:
+                return m.group(1)
+        except Exception:
+            pass
         return ""
 
-    def _ping(self, ip):
+    def _testar_dns(self) -> dict:
+        """Resolve google.com e mede o tempo de resposta."""
         try:
-            res = subprocess.run(["ping", "-n", "1", "-w", "500", ip], capture_output=True, text=True, creationflags=0x08000000)
-            if res.returncode == 0:
-                m = re.search(r"tempo[=<](\d+)ms", res.stdout)
-                return (f"{m.group(1)}ms" if m else "OK"), True
-        except: pass
-        return "Falha", False
+            inicio = time.perf_counter()
+            socket.setdefaulttimeout(3)
+            ip_resolvido = socket.gethostbyname("google.com")
+            tempo_ms = int((time.perf_counter() - inicio) * 1000)
+            return {
+                "ok": True,
+                "texto": f"google.com → {ip_resolvido} ({tempo_ms} ms)",
+                "tempo_ms": tempo_ms,
+            }
+        except Exception as e:
+            return {"ok": False, "texto": f"Falha: {e}", "tempo_ms": None}
 
-    def _test_dns(self):
+    def _sinal_wifi(self) -> dict:
+        """
+        Lê dados do Wi-Fi via netsh wlan show interfaces.
+        Retorna sinal em %, SSID, BSSID, canal e velocidade.
+        """
         try:
-            t = time.perf_counter()
-            socket.gethostbyname("google.com")
-            return f"{(time.perf_counter()-t)*1000:.0f}ms", True
-        except: return "Falha", False
+            resultado = subprocess.run(
+                ["netsh", "wlan", "show", "interfaces"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                encoding="utf-8",
+                errors="ignore",
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            saida = resultado.stdout
 
-    def _get_wifi_signal(self):
-        try:
-            res = subprocess.run(["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True, creationflags=0x08000000)
-            m = re.search(r"Sinal\s+:\s+(\d+)%", res.stdout)
-            if m: return f"{m.group(1)}%", True
-        except: pass
-        return "N/A", False
+            def _extrair(padrao, texto):
+                m = re.search(padrao, texto, re.IGNORECASE)
+                return m.group(1).strip() if m else "—"
 
-    def _get_iface_errors(self, name):
+            sinal_txt = _extrair(r"Sinal\s*:\s*(\d+)%", saida)
+            if sinal_txt == "—":
+                sinal_txt = _extrair(r"Signal\s*:\s*(\d+)%", saida)
+
+            sinal_pct = int(sinal_txt) if sinal_txt.isdigit() else 0
+
+            return {
+                "disponivel": sinal_pct > 0,
+                "sinal_pct":  sinal_pct,
+                "ssid":       _extrair(r"SSID\s*:\s*(.+)", saida),
+                "bssid":      _extrair(r"BSSID\s*:\s*(.+)", saida),
+                "canal":      _extrair(r"Canal\s*:\s*(\d+)", saida) or _extrair(r"Channel\s*:\s*(\d+)", saida),
+                "velocidade": _extrair(r"Taxa de recep[çc][aã]o\s*:\s*(.+)", saida) or
+                              _extrair(r"Receive rate.*?:\s*(.+)", saida),
+            }
+        except Exception:
+            return {"disponivel": False}
+
+    def _stats_interface(self, nome_iface: str) -> dict:
+        """Lê contadores de drops e erros via psutil."""
         try:
             import psutil
-            s = psutil.net_io_counters(pernic=True)
-            for k, v in s.items():
-                if name.lower() in k.lower() or k.lower() in name.lower():
-                    return {'dropin': v.dropin}
-        except: pass
-        return None
+            contadores = psutil.net_io_counters(pernic=True)
+            nome_lower = (nome_iface or "").lower()
+            for nome_nic, stats in contadores.items():
+                if nome_lower in nome_nic.lower() or nome_nic.lower() in nome_lower:
+                    return {
+                        "disponivel": True,
+                        "drops": stats.dropin + stats.dropout,
+                        "erros": stats.errin + stats.errout,
+                        "bytes_enviados":   stats.bytes_sent,
+                        "bytes_recebidos":  stats.bytes_recv,
+                    }
+            return {"disponivel": True, "drops": 0, "erros": 0}
+        except ImportError:
+            return {"disponivel": False}
+        except Exception:
+            return {"disponivel": False}
 
-    def exportar(self):
+    # ── Utilitários de formatação HTML ────────────────────────────────────
+
+    def _tabela_html(self, linhas: list) -> str:
+        """Gera uma tabela HTML simples de dois campos: rótulo e valor."""
+        html = "<table style='border-collapse:collapse; width:100%; font-size:11px;'>"
+        for rotulo, valor in linhas:
+            html += (
+                f"<tr>"
+                f"<td style='color:{self._COR_DIM}; padding:4px 14px 4px 0; "
+                f"white-space:nowrap; vertical-align:top;'>{rotulo}</td>"
+                f"<td style='color:{self._COR_TEXTO}; font-family:Consolas; "
+                f"padding:4px 0; word-break:break-all;'>{valor}</td>"
+                f"</tr>"
+            )
+        html += "</table>"
+        return html
+
+    def _item_check(self, ok: bool, texto: str, dica: str = "") -> str:
+        """Retorna HTML de um item de checklist com ícone colorido."""
+        icone = "" if ok else ""
+        cor   = self._COR_OK if ok else self._COR_ERRO
+        extra = f" <span style='color:{self._COR_DIM}; font-size:9px;'>— {dica}</span>" if dica else ""
+        return (
+            f"<div style='color:{cor}; padding:2px 0; font-size:11px;'>"
+            f"<span style='font-weight:bold;'>{icone}</span>&nbsp;&nbsp;{texto}{extra}</div>"
+        )
+
+    # ── Auto-refresh ─────────────────────────────────────────────────────
+
+    def _ao_alternar_auto_refresh(self, ativo: bool):
+        if ativo:
+            self._timer_auto.start(3000)
+        else:
+            self._timer_auto.stop()
+
+    # ── Exportação ───────────────────────────────────────────────────────
+
+    def _exportar_relatorio(self):
+        """Salva o relatório completo em arquivo .txt na pasta atual."""
         try:
-            path = f"diagnostico_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-            with open(path, "w") as f:
-                f.write(f"NetLab v4.0 - Diagnóstico\nGerado em: {datetime.now()}\nInterface: {self.main.combo_interface.currentText()}\n")
-            QMessageBox.information(self, "Exportar", f"Salvo em {path}")
-        except: pass
+            nome_arquivo = f"netlab_diagnostico_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            r = self._ultimo_relatorio
 
-import platform
-from datetime import datetime
+            linhas = [
+                "=" * 60,
+                "NETLAB EDUCACIONAL — DIAGNÓSTICO COMPLETO",
+                f"Gerado em: {r.get('timestamp', 'N/A')}",
+                "=" * 60,
+                "",
+                "[ SISTEMA ]",
+                f"  Python:         {platform.python_version()}",
+                f"  Sistema:        {platform.system()} {platform.release()}",
+                f"  Scapy:          {r.get('versao_scapy', 'N/A')}",
+                f"  Npcap:          {r.get('versao_npcap', 'N/A')}",
+                f"  Administrador:  {'Sim' if r.get('eh_admin') else 'Não'}",
+                "",
+                "[ INTERFACE ]",
+                f"  Interface:  {r.get('interface', 'N/A')}",
+                f"  Dispositivo:{r.get('nome_iface', 'N/A')}",
+                f"  IP Local:   {r.get('ip_local', 'N/A')}",
+                "",
+                "[ CONECTIVIDADE ]",
+            ]
+
+            dns = r.get("dns", {})
+            gw  = r.get("gateway", {})
+            linhas.append(f"  DNS:     {dns.get('texto', 'N/A')}")
+            linhas.append(f"  Gateway: {gw.get('texto', 'N/A')}")
+
+            wifi = r.get("wifi")
+            if wifi and wifi.get("disponivel"):
+                linhas += [
+                    "",
+                    "[ WI-FI ]",
+                    f"  SSID:       {wifi.get('ssid', 'N/A')}",
+                    f"  Sinal:      {wifi.get('sinal_pct', 0)}%",
+                    f"  Canal:      {wifi.get('canal', 'N/A')}",
+                    f"  Velocidade: {wifi.get('velocidade', 'N/A')}",
+                ]
+
+            iface = r.get("iface", {})
+            if iface.get("disponivel"):
+                linhas += [
+                    "",
+                    "[ ESTATÍSTICAS DA INTERFACE ]",
+                    f"  Drops: {iface.get('drops', 0)}",
+                    f"  Erros: {iface.get('erros', 0)}",
+                ]
+
+            snap = r.get("snap", {})
+            linhas += [
+                "",
+                "[ SESSÃO DE CAPTURA ]",
+                f"  Pacotes:  {snap.get('total_pacotes', 0):,}",
+                f"  Volume:   {snap.get('total_bytes', 0) / 1024:.1f} KB",
+                "",
+                "=" * 60,
+            ]
+
+            with open(nome_arquivo, "w", encoding="utf-8") as arq:
+                arq.write("\n".join(linhas))
+
+            QMessageBox.information(
+                self, "Exportação concluída",
+                f"Relatório salvo em:\n{os.path.abspath(nome_arquivo)}"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Erro ao exportar", str(e))
+
+
+# ── Função auxiliar fora da classe ──────────────────────────────────────────
+
+def _obter_ip_local_seguro() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+
+
+# ============================================================================
+# Importações do restante do projeto
+# ============================================================================
 
 from analisador_pacotes import AnalisadorPacotes
 from motor_pedagogico import MotorPedagogico
@@ -343,10 +950,6 @@ class EstadoRede:
             if chave in self.ultimos_eventos:
                 if agora - self.ultimos_eventos[chave] < cooldown:
                     return False
-
-            # Limpeza periódica: remove entradas com mais de 120 segundos.
-            # Sem isso o dicionário cresce indefinidamente — cada URL, IP e
-            # domínio únicos visto na sessão fica armazenado para sempre.
             if len(self.ultimos_eventos) > 2000:
                 corte = agora - 120
                 chaves_antigas = [
@@ -354,7 +957,6 @@ class EstadoRede:
                 ]
                 for k in chaves_antigas:
                     del self.ultimos_eventos[k]
-
             self.ultimos_eventos[chave] = agora
             return True
 
@@ -413,7 +1015,7 @@ def obter_interfaces_disponiveis() -> list:
 # Thread do sniffer
 # ============================================================================
 
-_MAX_PACOTES_POR_SEGUNDO = 800
+_MAX_PACOTES_POR_SEGUNDO      = 800
 _MAX_PACOTES_WIFI_POR_SEGUNDO = 400
 
 
@@ -424,14 +1026,13 @@ class _CapturadorPacotesThread(QThread):
     def __init__(self, interface: str, eh_wifi: bool = False):
         super().__init__()
         self.interface = interface
-        self.eh_wifi   = eh_wifi   # <-- NOVO
+        self.eh_wifi   = eh_wifi
         self._rodando  = False
         self.sniffer   = None
-        self._pps_contador  = 0
-        self._pps_reset_ts  = 0.0
-        self._limite_pps    = (
-            _MAX_PACOTES_WIFI_POR_SEGUNDO
-            if eh_wifi else _MAX_PACOTES_POR_SEGUNDO
+        self._pps_contador = 0
+        self._pps_reset_ts = 0.0
+        self._limite_pps   = (
+            _MAX_PACOTES_WIFI_POR_SEGUNDO if eh_wifi else _MAX_PACOTES_POR_SEGUNDO
         )
 
     def run(self):
@@ -444,7 +1045,7 @@ class _CapturadorPacotesThread(QThread):
                     prn=self._processar_pacote,
                     store=False,
                     filter="ip or arp",
-                    promisc=not self.eh_wifi,   # <-- MUDANÇA: Wi-Fi não usa promisc
+                    promisc=not self.eh_wifi,
                 )
                 self.sniffer.start()
                 while self._rodando:
@@ -993,8 +1594,6 @@ class JanelaPrincipal(QMainWindow):
 
         self.estado_rede = EstadoRede()
         self.gerenciador_subredes = GerenciadorSubRedes()
-        # Gerenciador de identificação de fabricantes via OUI (Singleton)
-        # Inicializado uma única vez; compartilhado com painel_topologia
         self.gerenciador_dispositivos = GerenciadorDispositivos()
         self.fila_eventos_ui: deque = deque(maxlen=500)
         self.eventos_mostrados_recentemente: deque = deque(maxlen=200)
@@ -1070,12 +1669,10 @@ class JanelaPrincipal(QMainWindow):
         self.acao_captura.triggered.connect(self._alternar_captura)
         m_mon.addAction(self.acao_captura)
 
-        # ── Menu: Atualizar base OUI ──────────────────────────────────────
         m_mon.addSeparator()
         a_atualizar_oui = QAction("Atualizar Base de Fabricantes", self)
         a_atualizar_oui.setToolTip(
-            "Baixa a base OUI mais recente do Wireshark (requer internet).\n"
-            "A identificação de fabricantes em dispositivos novos será aprimorada."
+            "Baixa a base OUI mais recente do Wireshark (requer internet)."
         )
         a_atualizar_oui.triggered.connect(self._solicitar_atualizacao_base_oui)
         m_mon.addAction(a_atualizar_oui)
@@ -1119,9 +1716,7 @@ class JanelaPrincipal(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.abas = QTabWidget()
-        # ── PATCH: lazy loading ao trocar de aba ──────────────────────────
         self.abas.currentChanged.connect(self._ao_mudar_aba)
-        # ──────────────────────────────────────────────────────────────────
         layout.addWidget(self.abas)
 
         self.painel_topologia = PainelTopologia()
@@ -1148,13 +1743,6 @@ class JanelaPrincipal(QMainWindow):
 
     @pyqtSlot(int)
     def _ao_mudar_aba(self, idx: int):
-        """
-        PATCH v3.1: quando o usuário abre o Modo Análise, reaplicar os
-        filtros com o guard de chave ativo — reconstrói a lista apenas se
-        houve eventos novos desde a última vez que a aba ficou visível.
-        Isso elimina o freeze causado por centenas de widgets sendo
-        instanciados de uma só vez no momento da troca de aba.
-        """
         if self.abas.widget(idx) is self.painel_eventos:
             self.painel_eventos._reaplicar_filtros()
 
@@ -1209,7 +1797,6 @@ class JanelaPrincipal(QMainWindow):
                 self._mapa_interface_ip[desc] = ip_v4
 
                 def _normalizar_mascara(candidato, ip_ref: str) -> str:
-                    """Aceita '255.255.255.0' ou '24' e devolve dotted-decimal."""
                     if not candidato:
                         return ""
                     s = str(candidato).strip()
@@ -1250,14 +1837,12 @@ class JanelaPrincipal(QMainWindow):
 
             self._aplicar_info_windows_interface(desc, nome, interfaces_windows)
 
-            # Se a máscara ainda estiver ausente após o Scapy, busca diretamente
-            # nos dados do PowerShell estruturado (interfaces_windows)
             if desc not in self._mapa_interface_mascara or not self._mapa_interface_mascara.get(desc):
                 for iw in interfaces_windows:
-                    iw_ip = iw.get("ip", "")
+                    iw_ip   = iw.get("ip", "")
                     iw_mask = iw.get("mascara", "")
                     iw_desc = self._normalizar_nome_iface(iw.get("descricao", ""))
-                    iw_alias = self._normalizar_nome_iface(iw.get("alias", ""))
+                    iw_alias= self._normalizar_nome_iface(iw.get("alias", ""))
                     if iw_ip and iw_mask and iw_mask != "0.0.0.0":
                         if (
                             ip_v4 and ip_v4 == iw_ip
@@ -1367,16 +1952,16 @@ class JanelaPrincipal(QMainWindow):
                 except Exception:
                     continue
                 interfaces.append({
-                    "alias": str(item.get("InterfaceAlias") or ""),
-                    "descricao": str(item.get("InterfaceDescription") or ""),
-                    "indice": str(item.get("InterfaceIndex") or ""),
-                    "ip": ip,
-                    "prefixo": prefixo,
-                    "mascara": self._prefixo_para_mascara(prefixo),
-                    "cidr": str(rede),
+                    "alias":    str(item.get("InterfaceAlias") or ""),
+                    "descricao":str(item.get("InterfaceDescription") or ""),
+                    "indice":   str(item.get("InterfaceIndex") or ""),
+                    "ip":       ip,
+                    "prefixo":  prefixo,
+                    "mascara":  self._prefixo_para_mascara(prefixo),
+                    "cidr":     str(rede),
                 })
 
-            self._cache_interfaces_windows = interfaces
+            self._cache_interfaces_windows    = interfaces
             self._cache_interfaces_windows_ts = time.time()
             return list(interfaces)
         except Exception:
@@ -1468,7 +2053,7 @@ class JanelaPrincipal(QMainWindow):
                 timeout=10,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            raw  = proc.stdout
+            raw   = proc.stdout
             saida = ""
             for enc in ("cp850", "cp1252", "utf-8", "latin-1"):
                 try:
@@ -1517,9 +2102,7 @@ class JanelaPrincipal(QMainWindow):
 
     @staticmethod
     def _detectar_cidr_via_psutil(ip_local: str) -> str:
-        """Detecta CIDR via psutil — cross-platform, sem processos externos."""
         try:
-            import socket
             import psutil
             AF_INET = socket.AF_INET
             for addrs in psutil.net_if_addrs().values():
@@ -1537,7 +2120,6 @@ class JanelaPrincipal(QMainWindow):
 
     @staticmethod
     def _detectar_cidr_via_netifaces(ip_local: str) -> str:
-        """Detecta CIDR via netifaces — cross-platform."""
         try:
             import netifaces
             for iface in netifaces.interfaces():
@@ -1555,7 +2137,6 @@ class JanelaPrincipal(QMainWindow):
 
     @staticmethod
     def _detectar_cidr_via_wmi(ip_local: str) -> str:
-        """Detecta CIDR via WMI (Win32_NetworkAdapterConfiguration) — Windows apenas."""
         try:
             resultado = subprocess.run(
                 [
@@ -1578,29 +2159,27 @@ class JanelaPrincipal(QMainWindow):
         return ""
 
     def _cidr_da_interface(self, desc: str) -> str:
-        """
-        Detecta o CIDR da interface usando o motor robusto centralizado.
-        """
-        ip_interface = (self._mapa_interface_ip.get(desc.strip(), "") 
-                        or self._mapa_interface_ip.get(desc, "") 
-                        or obter_ip_local())
-        
-        # 1. Tenta via IP/Máscara já conhecidos (mais rápido)
-        mascara = (self._mapa_interface_mascara.get(desc.strip(), "") 
-                   or self._mapa_interface_mascara.get(desc, ""))
+        ip_interface = (
+            self._mapa_interface_ip.get(desc.strip(), "")
+            or self._mapa_interface_ip.get(desc, "")
+            or obter_ip_local()
+        )
+
+        mascara = (
+            self._mapa_interface_mascara.get(desc.strip(), "")
+            or self._mapa_interface_mascara.get(desc, "")
+        )
         if mascara:
             cidr = converter_ip_mascara_para_cidr(ip_interface, mascara)
             if cidr:
                 self._status(f" CIDR via mapas internos: {cidr}")
                 return cidr
 
-        # 2. Tenta via motor robusto (PowerShell, WMI, psutil, ipconfig, RFC 1918)
         cidr = detectar_cidr_robusto(ip_interface)
         if cidr:
             self._status(f" CIDR via motor robusto: {cidr}")
             return cidr
 
-        # 3. Fallback absoluto (melhor que nada, mas tratado como "não detectado" no diagnóstico)
         return f"{ip_interface}/32"
 
     def _parametros_iface_seguro(self, nome_iface: str) -> dict:
@@ -1611,46 +2190,39 @@ class JanelaPrincipal(QMainWindow):
         )
 
         base = {
-            "limite_hosts":   100,
-            "desativar_icmp": False,
+            "limite_hosts":     100,
+            "desativar_icmp":   False,
             "descoberta_ativa": True,
-            "tentativas":     _DescobrirDispositivosThread.TENTATIVAS,
-            "timeout":        _DescobrirDispositivosThread.TIMEOUT_ARP,
-            "pausa":          _DescobrirDispositivosThread.PAUSA_RODADAS,
-            "inter":          _DescobrirDispositivosThread.INTER_ARP,
-            "sleep_lote":     0.0,
-            "batch":          _DescobrirDispositivosThread.BATCH_ARP,
-            "wifi":           eh_wifi,
-            "timer_ms":       30000,
+            "tentativas":       _DescobrirDispositivosThread.TENTATIVAS,
+            "timeout":          _DescobrirDispositivosThread.TIMEOUT_ARP,
+            "pausa":            _DescobrirDispositivosThread.PAUSA_RODADAS,
+            "inter":            _DescobrirDispositivosThread.INTER_ARP,
+            "sleep_lote":       0.0,
+            "batch":            _DescobrirDispositivosThread.BATCH_ARP,
+            "wifi":             eh_wifi,
+            "timer_ms":         30000,
         }
 
         if eh_wifi:
             base.update({
-                "batch":          0,
-                "sleep_lote":     0.0,
-                "pausa":          0.0,
-                "timeout":        0.0,
-                "tentativas":     0,
-                "desativar_icmp": True,
+                "batch":            0,
+                "sleep_lote":       0.0,
+                "pausa":            0.0,
+                "timeout":          0.0,
+                "tentativas":       0,
+                "desativar_icmp":   True,
                 "descoberta_ativa": False,
-                "timer_ms":       60_000,
+                "timer_ms":         60_000,
             })
 
         return base
 
     def _sincronizar_subredes_topologia(self):
-        """Envia ao painel a fotografia atual das sub-redes conhecidas."""
         self.painel_topologia.atualizar_subredes(
             self.gerenciador_subredes.todas_subredes()
         )
 
     def _registrar_subrede_local(self):
-        """
-        Registra a sub-rede da interface ativa sem alargar o escopo artificialmente.
-
-        Se o CIDR nao puder ser determinado com seguranca, o projeto ja usa /32.
-        Mantemos esse comportamento para preservar a honestidade da topologia.
-        """
         if not self._cidr_captura:
             return
 
@@ -1683,20 +2255,15 @@ class JanelaPrincipal(QMainWindow):
         atualizar_subredes: bool = True,
         cidr_forcado: str = "",
     ) -> bool:
-        """
-        Registra um host observado sem criar evidencias artificiais.
-
-        Retorna True quando houve mudanca de hosts/visibilidade em alguma sub-rede.
-        """
         if not ip or not _ip_eh_topologizavel(ip):
             return False
 
-        subrede = None
+        subrede  = None
         eh_local = False
         if cidr_forcado:
             subrede_forcada = self.gerenciador_subredes.subredes.get(cidr_forcado)
             if subrede_forcada and subrede_forcada.contem(ip):
-                subrede = subrede_forcada
+                subrede  = subrede_forcada
                 eh_local = (subrede.cidr == self.gerenciador_subredes._cidr_local())
 
         if subrede is None:
@@ -1704,7 +2271,7 @@ class JanelaPrincipal(QMainWindow):
         houve_alteracao = False
 
         if subrede:
-            total_hosts_antes = len(subrede.hosts)
+            total_hosts_antes  = len(subrede.hosts)
             visibilidade_antes = subrede.visibilidade
 
             subrede.adicionar_host(ip, confirmado=confirmado_por_arp)
@@ -1847,7 +2414,7 @@ class JanelaPrincipal(QMainWindow):
         try:
             self.capturador = _CapturadorPacotesThread(
                 interface=nome_dispositivo,
-                eh_wifi=self._eh_wifi          # <-- NOVO
+                eh_wifi=self._eh_wifi,
             )
             self.capturador.erro_ocorrido.connect(self._ao_ocorrer_erro)
             self.capturador.sem_pacotes.connect(self._ao_ocorrer_erro)
@@ -1859,9 +2426,6 @@ class JanelaPrincipal(QMainWindow):
             self._limpar_pos_falha()
             return
 
-        # 400ms é suficiente — a thread de análise já processa em paralelo.
-        # Em 250ms com volume alto de pacotes, _consumir_fila era chamado
-        # antes dos resultados estarem prontos, gerando ciclos vazios frequentes.
         self.timer_consumir.start(400)
         self.timer_ui.start(1000)
         self.timer_descoberta.start(self._periodo_timer_ms)
@@ -2013,24 +2577,12 @@ class JanelaPrincipal(QMainWindow):
 
     @pyqtSlot()
     def _descarregar_eventos_ui(self):
-        """
-        Timer a cada 2s: descarrega a fila de eventos para o motor pedagógico.
-
-        PATCH v3.1 — backpressure:
-          Limita a 8 eventos por ciclo (descarta os mais antigos se a fila
-          acumulou mais). Em redes movimentadas, o cooldown em _consumir_fila
-          já filtra duplicatas; descartar eventos antigos é aceitável e
-          previne que a UI thread seja sobrecarregada.
-        """
         if not self.fila_eventos_ui:
             return
 
         lote = list(self.fila_eventos_ui)
         self.fila_eventos_ui.clear()
-
-        # ── Backpressure: máx 8 eventos por ciclo de 2s ──────────────────
         lote = lote[-8:]
-        # ──────────────────────────────────────────────────────────────────
 
         for ev in self._agregar_eventos(lote):
             tipo = ev.get("tipo", "")
@@ -2079,19 +2631,21 @@ class JanelaPrincipal(QMainWindow):
             total_ativos           =self.painel_topologia.total_dispositivos(),
         )
         self.painel_topologia.atualizar()
-        
+
         kb = total_bytes / 1024
         curr_cidr = self._cidr_captura or ""
-        
+
         self.painel_eventos.atualizar_stats(
             pacotes=total_pacotes,
             rede=curr_cidr if curr_cidr else "—",
             dados=formatar_bytes(total_bytes)
         )
-        # Garante que o CIDR atualizado seja mostrado
-        curr_cidr = self._cidr_captura
-        cidr_label = f"Rede: {curr_cidr}" if (curr_cidr and "/32" not in str(curr_cidr)) else "Rede: Detectando..."
-        
+        cidr_label = (
+            f"Rede: {curr_cidr}"
+            if (curr_cidr and "/32" not in str(curr_cidr))
+            else "Rede: Detectando..."
+        )
+
         self.lbl_pacotes.setText(f"Pacotes: {total_pacotes:,}")
         self.lbl_dados.setText(
             f"  {cidr_label}  |  Dados: {kb/1024:.2f} MB  " if kb > 1024
@@ -2131,7 +2685,7 @@ class JanelaPrincipal(QMainWindow):
         ):
             return
 
-        cidr_local = self.gerenciador_subredes._cidr_local()
+        cidr_local    = self.gerenciador_subredes._cidr_local()
         cidr_varredura = cidr_local if cidr_local else self._cidr_captura
         limite_inicial = min(500, self._limite_hosts)
 
@@ -2212,7 +2766,6 @@ class JanelaPrincipal(QMainWindow):
             )
 
     def _atualizar_subredes_rotas(self):
-        """Atualiza segmentos inferidos via tabela de rotas."""
         if not self.em_captura:
             return
 
@@ -2227,7 +2780,6 @@ class JanelaPrincipal(QMainWindow):
 
     @staticmethod
     def _obter_tabela_arp_sistema() -> list:
-        import platform
         entradas = []
         try:
             if platform.system() == "Windows":
@@ -2283,7 +2835,7 @@ class JanelaPrincipal(QMainWindow):
         if not self._interface_captura:
             return
 
-        cidr_local = self.gerenciador_subredes._cidr_local()
+        cidr_local     = self.gerenciador_subredes._cidr_local()
         cidr_varredura = cidr_local if cidr_local else self._cidr_captura
 
         self.descoberta_rodando = True
@@ -2389,14 +2941,9 @@ class JanelaPrincipal(QMainWindow):
     # ─────────────────────────────────────────────────────────────────────
 
     def _solicitar_atualizacao_base_oui(self):
-        """
-        Versão simplificada: usa QTimer.singleShot para redirecionar
-        o callback para a UI thread de forma segura no PyQt6.
-        """
         self._status(" Baixando base de fabricantes do Wireshark… (em segundo plano)")
 
         def ao_concluir(sucesso: bool, mensagem: str):
-            # Agenda execução na UI thread via QTimer (thread-safe)
             self._resultado_atualizacao_oui = (sucesso, mensagem)
             QTimer.singleShot(0, self._ao_concluir_atualizacao_oui)
 
