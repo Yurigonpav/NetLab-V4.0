@@ -262,7 +262,7 @@ class _ItemWidget(QWidget):
 
         # Indicador de criticidade
         if nivel in ("CRITICO", "AVISO"):
-            dot = QLabel("•")
+            dot = QLabel("●")
             dot.setStyleSheet(
                 f"color: {cor_nivel}; font-size: 8px; background: transparent;"
             )
@@ -432,7 +432,7 @@ class PainelEventos(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self._todos_eventos = deque()
+        self._todos_eventos = deque(maxlen=150)
         self._evento_atual  = None
         self._filtro_proto  = "Todos"
         self._filtro_texto  = ""
@@ -547,7 +547,7 @@ class PainelEventos(QWidget):
         l1.addWidget(self._campo_busca)
 
         # Botão para limpar a busca
-        self._btn_limpar_busca = QPushButton("x")
+        self._btn_limpar_busca = QPushButton("✕")
         self._btn_limpar_busca.setFixedSize(20, 20)
         self._btn_limpar_busca.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_limpar_busca.setVisible(False)
@@ -976,7 +976,7 @@ class PainelEventos(QWidget):
             partes.append(f"· {e['tamanho']} bytes")
         if nivel in ("CRITICO", "AVISO"):
             cor_n = _NIVEL_COR.get(nivel, _MUTED)
-            partes.append(f'<span style="color:{cor_n};">• {nivel}</span>')
+            partes.append(f'<span style="color:{cor_n};">● {nivel}</span>')
 
         self._det_resumo.setText("   ".join(partes) if partes else "")
         self._lbl_status.setText(
@@ -1084,47 +1084,15 @@ class PainelEventos(QWidget):
             )
             pos += 1
 
-        # ── COMO FUNCIONA ────────────────────────────────────
-        tipo = e.get("tipo", "")
-        cor  = _cor(tipo)
-        r, g, b = _rgb(cor)
-
-        destino = e.get("ip_destino", "—")
-        porta   = e.get("porta_destino", "")
-        tam     = e.get("tamanho", 0) or 0
-
-        linhas_tecnicas = [
-            ("Destino", f"{destino}{':' + str(porta) if porta else ''}"),
-            ("Tamanho do pacote", f"{tam} bytes" if tam else None),
-        ]
-        linhas_extras = e.get("nivel3_campos", [])
-        linhas_tecnicas.extend(linhas_extras)
-
-        html_c_partes = []
-        for rot, val in linhas_tecnicas:
-            if not val:
-                continue
-            html_c_partes.append(
-                f'<p><b style="color:{_MUTED};font-weight:normal;">{rot}:</b> '
-                f'<span style="color:{_ACCENT2};font-family:Consolas;">{val}</span></p>'
-            )
-
-        dica = e.get("dica_como_funciona", "")
-        if dica:
-            html_c_partes.append(
-                f'<p style="margin-top:10px;border-top:1px solid {_BORDA};'
-                f'padding-top:8px;">{dica}</p>'
-            )
-
-        if html_c_partes:
-            html_c = f"<style>{self._CSS_BASE}</style><body>{''.join(html_c_partes)}</body>"
-            self._inserir_secao(
-                "COMO FUNCIONA",
-                self._browser(html_c, 60, 260),
-                _MUTED,
-                pos,
-            )
-            pos += 1
+        # ── COMO FUNCIONA (gerado dinamicamente com dados reais) ──
+        html_cf = self._gerar_html_como_funciona(e)
+        self._inserir_secao(
+            "COMO FUNCIONA",
+            self._browser(html_cf, 80, 420),
+            _MUTED,
+            pos,
+        )
+        pos += 1
 
         # ── ALERTA DE SEGURANÇA (nível CRITICO ou AVISO) ─────
         alerta = e.get("alerta_seguranca", "")
@@ -1158,6 +1126,406 @@ class PainelEventos(QWidget):
                 cor_al,
                 pos,
             )
+
+    # ─────────────────────────────────────────────────────────
+    # GERADOR DIDÁTICO DE "COMO FUNCIONA"
+    # ─────────────────────────────────────────────────────────
+
+    def _gerar_html_como_funciona(self, e: dict) -> str:
+        """
+        Gera HTML educativo e contextualizado para a seção 'Como Funciona',
+        usando os dados reais do evento capturado (IPs, portas, domínio, tamanho).
+
+        Cada protocolo tem sua própria explicação passo a passo, conectando
+        o que foi capturado ao mecanismo técnico subjacente.
+        """
+        tipo   = e.get("tipo", "")
+        orig   = e.get("ip_origem",  "?")
+        dest   = e.get("ip_destino", "?")
+        porta  = e.get("porta_destino", "")
+        tam    = e.get("tamanho", 0) or 0
+        dom    = e.get("dominio", "")
+        mac    = e.get("mac_origem", "")
+        tam_s  = f"{tam} bytes" if tam else "—"
+
+        # Endereço destino formatado com porta quando disponível
+        dest_porta = f"{dest}:{porta}" if porta else dest
+
+        # ── Helpers de formatação HTML ──────────────────────
+
+        def ip(val: str) -> str:
+            """Formata um IP/hostname com destaque monoespaçado."""
+            return f'<code>{val}</code>'
+
+        def passo(numero: str, titulo_passo: str, corpo: str) -> str:
+            """Renderiza um passo numerado do fluxo do protocolo."""
+            return (
+                f'<div style="display:flex;gap:10px;margin:6px 0;">'
+                f'<span style="color:{_DIM};font-family:Consolas;font-size:10px;'
+                f'min-width:18px;padding-top:1px;">{numero}</span>'
+                f'<div><b style="color:{_TEXTO2}">{titulo_passo}</b>'
+                f'<span style="color:{_TEXTO2}"> — </span>{corpo}</div>'
+                f'</div>'
+            )
+
+        def linha_dados(rotulo: str, valor: str, cor_val: str = _ACCENT2) -> str:
+            """Renderiza uma linha de dado capturado (chave: valor)."""
+            return (
+                f'<div style="margin:2px 0;">'
+                f'<span style="color:{_MUTED}">{rotulo}:</span> '
+                f'<code style="color:{cor_val}">{valor}</code>'
+                f'</div>'
+            )
+
+        def caixa_captura(linhas: list[str]) -> str:
+            """Renderiza uma caixa com os dados reais capturados pelo sniffer."""
+            conteudo = "".join(linhas)
+            return (
+                f'<div style="background:rgba(0,0,0,0.25);border:1px solid {_BORDA2};'
+                f'border-radius:5px;padding:8px 12px;margin:10px 0 4px;">'
+                f'<div style="color:{_DIM};font-size:9px;letter-spacing:1px;'
+                f'margin-bottom:6px;">CAPTURADO NESTE PACOTE</div>'
+                f'{conteudo}'
+                f'</div>'
+            )
+
+        def aviso(txt: str, cor_av: str = _AVISO) -> str:
+            """Renderiza um aviso contextual."""
+            return (
+                f'<div style="border-left:2px solid {cor_av};padding:4px 0 4px 10px;'
+                f'margin:10px 0 0;color:{_TEXTO2};">{txt}</div>'
+            )
+
+        def nao_ve(txt: str) -> str:
+            """Indica o que o sniffer NÃO consegue ver."""
+            return (
+                f'<div style="margin-top:8px;color:{_DIM};font-size:10px;">'
+                f'<span style="color:{_OK}">✓</span> {txt}</div>'
+            )
+
+        # ══════════════════════════════════════════════════════
+        # CONTEÚDO POR PROTOCOLO
+        # ══════════════════════════════════════════════════════
+
+        conteudo = ""
+
+        if tipo == "HTTPS":
+            sni_info = (
+                f' O SNI enviado no ClientHello identifica o serviço como {ip(dom)}.'
+                if dom else
+                ' Nenhum SNI capturado neste pacote (pode ser pacote de dados, não o handshake).'
+            )
+            conteudo = (
+                passo("①", "TCP Handshake",
+                      f'{ip(orig)} envia SYN para {ip(dest_porta)}. '
+                      f'O servidor responde SYN-ACK e a conexão TCP é estabelecida.')
+                + passo("②", "TLS ClientHello",
+                        f'O cliente anuncia as cifras suportadas e envia o '
+                        f'<b>SNI (Server Name Indication)</b> — único campo visível ao sniffer.'
+                        + sni_info)
+                + passo("③", "Troca de chaves ECDHE",
+                        f'Cliente e servidor derivam uma chave de sessão efêmera. '
+                        f'Com <b>Perfect Forward Secrecy</b>, nem a chave privada do servidor '
+                        f'decripta sessões passadas.')
+                + passo("④", "Dados cifrados",
+                        f'URL, headers, cookies e corpo trafegam completamente opacos. '
+                        f'O sniffer só enxerga IPs, porta e tamanho dos pacotes.')
+                + caixa_captura([
+                    linha_dados("Fluxo", f"{orig} → {dest_porta}"),
+                    linha_dados("SNI visível", dom or "não capturado neste pacote", _ACCENT2),
+                    linha_dados("Tamanho", tam_s, _TEXTO2),
+                ])
+                + nao_ve("URL, cookies, credenciais e corpo da resposta estão cifrados pelo TLS.")
+            )
+
+        elif tipo == "HTTP":
+            conteudo = (
+                passo("①", "Requisição em texto puro",
+                      f'{ip(orig)} envia GET/POST para {ip(dest_porta)} sem nenhuma criptografia. '
+                      f'Método, URL, headers e corpo são completamente legíveis na rede.')
+                + passo("②", "Dados expostos",
+                        f'Qualquer dispositivo na mesma rede que capture este tráfego consegue ler '
+                        f'credenciais, cookies de sessão, formulários e o conteúdo das páginas.')
+                + passo("③", "Resposta do servidor",
+                        f'Status HTTP (200 OK, 404, etc.), headers de resposta e corpo '
+                        f'também trafegam em texto puro de volta para {ip(orig)}.')
+                + caixa_captura([
+                    linha_dados("Fluxo", f"{orig} → {dest_porta}"),
+                    linha_dados("Tamanho", tam_s, _TEXTO2),
+                    linha_dados("Cifrado", "NÃO — tráfego legível", _CRITICO),
+                ])
+                + aviso(
+                    '<b>Risco crítico:</b> credenciais e cookies transmitidos por HTTP '
+                    'podem ser capturados por qualquer dispositivo na rede. '
+                    'Migre para HTTPS + HSTS imediatamente.',
+                    _CRITICO,
+                )
+            )
+
+        elif tipo == "DNS":
+            conteudo = (
+                passo("①", "Consulta DNS (query)",
+                      f'{ip(orig)} não sabe o IP de {ip(dom) if dom else "um domínio"}. '
+                      f'Envia uma query UDP para o servidor DNS {ip(dest)} na porta 53.')
+                + passo("②", "Resposta do servidor",
+                        f'O servidor DNS responde com registros A (IPv4) ou AAAA (IPv6) '
+                        f'e um <b>TTL</b> que indica por quanto tempo o resultado pode ser cacheado.')
+                + passo("③", "Sem criptografia",
+                        f'Sem DoH (DNS over HTTPS) ou DoT (DNS over TLS), qualquer dispositivo '
+                        f'na rede consegue ver todos os domínios que {ip(orig)} consulta — '
+                        f'revelando intenção de navegação antes mesmo da conexão ser feita.')
+                + caixa_captura([
+                    linha_dados("Origem", orig),
+                    linha_dados("Servidor DNS", dest),
+                    linha_dados("Domínio consultado", dom or "não extraído neste pacote", _ACCENT2),
+                    linha_dados("Tamanho", tam_s, _TEXTO2),
+                ])
+                + aviso(
+                    '<b>Privacidade:</b> consultas DNS em texto puro mapeiam '
+                    'toda a navegação do usuário. Ative DoH ou DoT no roteador ou no sistema.'
+                )
+            )
+
+        elif tipo == "ARP":
+            conteudo = (
+                passo("①", "Broadcast ARP",
+                      f'{ip(orig)} precisa saber o MAC de um IP na rede local. '
+                      f'Envia um broadcast <code>FF:FF:FF:FF:FF:FF</code> — '
+                      f'todos os dispositivos da rede recebem essa pergunta.')
+                + passo("②", "Resposta ARP",
+                        f'O dono do IP alvo responde com seu MAC address. '
+                        f'{ip(orig)} registra o par IP→MAC na sua <b>ARP table</b> '
+                        f'e passa a enviar frames diretamente para ele.')
+                + passo("③", "Sem autenticação",
+                        f'O protocolo ARP não verifica a autenticidade das respostas. '
+                        f'Qualquer dispositivo pode responder com um MAC falso (<b>ARP Spoofing</b>), '
+                        f'desviando o tráfego de {ip(orig)} para um atacante.')
+                + caixa_captura([
+                    linha_dados("Origem", f"{orig}" + (f" ({mac})" if mac else "")),
+                    linha_dados("Destino ARP", dest),
+                    linha_dados("Tamanho", tam_s, _TEXTO2),
+                ])
+                + aviso(
+                    '<b>ARP Spoofing:</b> em redes sem Dynamic ARP Inspection (DAI), '
+                    'um atacante pode envenenar a ARP table de todos os hosts e '
+                    'interceptar tráfego sem que ninguém perceba.'
+                )
+            )
+
+        elif tipo == "TCP_SYN":
+            conteudo = (
+                passo("①", "SYN enviado",
+                      f'{ip(orig)} inicia o 3-way handshake enviando um pacote com flag '
+                      f'<b>SYN</b> para {ip(dest_porta)}. '
+                      f'Isso reserva uma entrada na tabela de conexões do servidor.')
+                + passo("②", "Aguardando SYN-ACK",
+                        f'O servidor deve responder com <b>SYN-ACK</b>, confirmando que '
+                        f'aceita a conexão. A conexão ainda não está estabelecida neste momento.')
+                + passo("③", "ACK completa o handshake",
+                        f'{ip(orig)} responde com <b>ACK</b>. '
+                        f'A conexão TCP está estabelecida e os dados podem fluir.')
+                + caixa_captura([
+                    linha_dados("Fluxo", f"{orig} → {dest_porta}"),
+                    linha_dados("Flag", "SYN (início de conexão)", _AVISO),
+                    linha_dados("Tamanho", tam_s, _TEXTO2),
+                ])
+                + aviso(
+                    '<b>SYN Flood:</b> um volume anormal de SYNs sem ACK de resposta '
+                    'esgota a tabela de conexões do servidor, tornando-o inacessível. '
+                    'Mitigação: SYN Cookies e rate limiting por IP.'
+                )
+            )
+
+        elif tipo == "ICMP":
+            conteudo = (
+                passo("①", "Pacote ICMP capturado",
+                      f'{ip(orig)} enviou um pacote ICMP para {ip(dest)}. '
+                      f'ICMP é um protocolo de diagnóstico — não carrega dados de aplicação.')
+                + passo("②", "Tipos possíveis",
+                        f'<b>Echo Request/Reply</b> (ping): testa conectividade. '
+                        f'<b>Time Exceeded</b>: TTL expirou em um roteador — '
+                        f'base do <code>traceroute</code>. '
+                        f'<b>Destination Unreachable</b>: destino inacessível.')
+                + passo("③", "TTL e fingerprinting",
+                        f'O valor de TTL do pacote revela o número de saltos percorridos '
+                        f'e permite estimar o sistema operacional do remetente '
+                        f'(Linux tipicamente parte de 64, Windows de 128).')
+                + caixa_captura([
+                    linha_dados("Origem", orig),
+                    linha_dados("Destino", dest),
+                    linha_dados("Tamanho", tam_s, _TEXTO2),
+                ])
+            )
+
+        elif tipo == "DHCP":
+            conteudo = (
+                passo("①", "DISCOVER",
+                      f'O dispositivo sem IP envia um broadcast para '
+                      f'{ip("255.255.255.255")}: "Há algum servidor DHCP na rede?"')
+                + passo("②", "OFFER",
+                        f'O servidor DHCP {ip(dest)} responde com uma oferta: '
+                        f'IP sugerido, máscara de sub-rede, gateway padrão e servidor DNS.')
+                + passo("③", "REQUEST",
+                        f'O dispositivo aceita a oferta enviando REQUEST de volta '
+                        f'ao servidor para confirmar o uso do IP proposto.')
+                + passo("④", "ACK",
+                        f'O servidor confirma com ACK. O dispositivo passa a usar '
+                        f'o IP recebido pelo tempo do <b>lease</b> definido na concessão.')
+                + caixa_captura([
+                    linha_dados("Origem", orig),
+                    linha_dados("Servidor DHCP", dest),
+                    linha_dados("Tamanho", tam_s, _TEXTO2),
+                ])
+                + aviso(
+                    '<b>Rogue DHCP:</b> sem autenticação, qualquer dispositivo pode '
+                    'atuar como servidor DHCP e distribuir gateway e DNS falsos, '
+                    'redirecionando todo o tráfego da rede. '
+                    'Ative DHCP Snooping no switch.'
+                )
+            )
+
+        elif tipo == "SSH":
+            conteudo = (
+                passo("①", "TCP Handshake",
+                      f'Conexão TCP estabelecida entre {ip(orig)} e {ip(dest_porta)}.')
+                + passo("②", "Negociação SSH",
+                        f'Cliente e servidor anunciam a versão do protocolo (ex: SSH-2.0) '
+                        f'e negociam algoritmos de cifra, MAC e troca de chaves — '
+                        f'visível ao sniffer apenas neste momento inicial.')
+                + passo("③", "Autenticação cifrada",
+                        f'Senha ou par de chaves (Ed25519 / RSA) são verificados '
+                        f'dentro do canal já cifrado. O sniffer não vê as credenciais.')
+                + passo("④", "Sessão opaca",
+                        f'Todos os comandos, saídas e arquivos transferidos trafegam '
+                        f'completamente cifrados durante toda a sessão.')
+                + caixa_captura([
+                    linha_dados("Fluxo", f"{orig} → {dest_porta}"),
+                    linha_dados("Tamanho", tam_s, _TEXTO2),
+                    linha_dados("Cifrado", "SIM — SSH/TLS", _OK),
+                ])
+                + nao_ve("Credenciais, comandos executados e saída do terminal estão cifrados.")
+            )
+
+        elif tipo == "FTP":
+            conteudo = (
+                passo("①", "Canal de controle (porta 21)",
+                      f'{ip(orig)} conecta à porta 21 de {ip(dest)}. '
+                      f'Todos os comandos — USER, PASS, LIST, RETR — '
+                      f'trafegam em texto puro neste canal.')
+                + passo("②", "Credenciais expostas",
+                        f'O login (<code>USER nome_usuario</code> / <code>PASS senha</code>) '
+                        f'é enviado literalmente em texto. '
+                        f'Qualquer sniffer na rede captura as credenciais.')
+                + passo("③", "Canal de dados",
+                        f'Para transferir arquivos, o FTP abre uma segunda conexão '
+                        f'(porta 20 em modo ativo, ou porta negociada em modo passivo). '
+                        f'Os arquivos também trafegam sem criptografia.')
+                + caixa_captura([
+                    linha_dados("Fluxo", f"{orig} → {dest_porta}"),
+                    linha_dados("Tamanho", tam_s, _TEXTO2),
+                    linha_dados("Cifrado", "NÃO — credenciais em texto puro", _CRITICO),
+                ])
+                + aviso(
+                    '<b>Alternativas seguras:</b> SFTP (porta 22, via SSH) '
+                    'cifra comandos e arquivos. FTPS adiciona TLS ao FTP legado.',
+                    _CRITICO,
+                )
+            )
+
+        elif tipo == "SMB":
+            conteudo = (
+                passo("①", "Negociação de protocolo",
+                      f'{ip(orig)} conecta a {ip(dest_porta)} e negocia a versão SMB '
+                      f'(SMBv1, SMBv2 ou SMBv3). A versão negociada determina '
+                      f'o nível de segurança da sessão.')
+                + passo("②", "Autenticação NTLM/Kerberos",
+                        f'Cliente e servidor realizam o desafio de autenticação. '
+                        f'Sem SMB Signing, o hash NTLM pode ser capturado e usado '
+                        f'em ataques de relay sem precisar decriptar a senha.')
+                + passo("③", "Acesso ao compartilhamento",
+                        f'Após autenticação, {ip(orig)} pode ler, escrever e executar '
+                        f'arquivos no servidor conforme as permissões configuradas.')
+                + caixa_captura([
+                    linha_dados("Fluxo", f"{orig} → {dest_porta}"),
+                    linha_dados("Tamanho", tam_s, _TEXTO2),
+                ])
+                + aviso(
+                    '<b>SMBv1:</b> vulnerável ao EternalBlue (WannaCry). '
+                    'Desabilite imediatamente se ainda ativo. '
+                    'Ative SMB Signing para prevenir ataques de relay.'
+                )
+            )
+
+        elif tipo == "RDP":
+            conteudo = (
+                passo("①", "TCP Handshake",
+                      f'{ip(orig)} inicia conexão TCP com {ip(dest_porta)} (porta padrão 3389).')
+                + passo("②", "Negociação TLS",
+                        f'RDP moderno usa TLS para cifrar a sessão. '
+                        f'<b>Sem NLA:</b> a tela de login é renderizada remotamente antes '
+                        f'da autenticação — expande a superfície de ataque. '
+                        f'<b>Com NLA:</b> autenticação ocorre antes de qualquer renderização.')
+                + passo("③", "Sessão de área de trabalho",
+                        f'Teclado, mouse e tela são transmitidos pelo protocolo RDP '
+                        f'dentro do canal TLS. A porta 3389 exposta na internet '
+                        f'é alvo constante de bots de força bruta.')
+                + caixa_captura([
+                    linha_dados("Fluxo", f"{orig} → {dest_porta}"),
+                    linha_dados("Tamanho", tam_s, _TEXTO2),
+                ])
+                + aviso(
+                    '<b>Exposição crítica:</b> RDP nunca deve estar exposto diretamente '
+                    'na internet. Acesso somente via VPN + NLA ativado + MFA.'
+                )
+            )
+
+        elif tipo == "NOVO_DISPOSITIVO":
+            mac_info = (
+                f'MAC detectado: {ip(mac)}. Os primeiros 3 bytes (OUI) identificam '
+                f'o fabricante e podem indicar o tipo de dispositivo.'
+                if mac else
+                'MAC não capturado neste evento.'
+            )
+            conteudo = (
+                passo("①", "Detecção de entrada",
+                      f'Um dispositivo com IP {ip(orig)} foi identificado pela primeira vez '
+                      f'na rede. A detecção ocorre via ARP, DHCP ou outros protocolos '
+                      f'que revelam o endereço MAC do dispositivo.')
+                + passo("②", "Identificação pelo OUI",
+                        mac_info + ' Ferramentas como <code>arp-scan</code> ou bases '
+                        'OUI públicas (IEEE) permitem identificar o fabricante em segundos.')
+                + passo("③", "Risco em redes sem controle de acesso",
+                        f'Em redes sem 802.1X, qualquer dispositivo com acesso físico '
+                        f'ou acesso à rede Wi-Fi entra livremente e recebe IP via DHCP. '
+                        f'Não há verificação de identidade ou autorização prévia.')
+                + caixa_captura([
+                    linha_dados("IP detectado", orig),
+                    linha_dados("MAC", mac or "não disponível", _ACCENT2),
+                ])
+                + aviso(
+                    '<b>Ação recomendada:</b> verifique se este dispositivo é autorizado. '
+                    'Em ambientes corporativos, implante 802.1X para autenticação '
+                    'por certificado antes de conceder acesso à rede.'
+                )
+            )
+
+        else:
+            # Protocolo genérico — exibe dados disponíveis de forma organizada
+            conteudo = (
+                passo("①", "Pacote capturado",
+                      f'O sniffer capturou tráfego de {ip(orig)} para {ip(dest_porta)}. '
+                      f'O protocolo <b>{tipo or "desconhecido"}</b> foi identificado '
+                      f'com base nas portas e no conteúdo do pacote.')
+                + passo("②", "Dados do fluxo",
+                        f'Tamanho do payload capturado: <b>{tam_s}</b>. '
+                        f'Analise a aba <b>Evidências</b> para ver os campos completos do pacote.')
+                + caixa_captura([
+                    linha_dados("Fluxo", f"{orig} → {dest_porta}"),
+                    linha_dados("Tamanho", tam_s, _TEXTO2),
+                ])
+            )
+
+        return f"<style>{self._CSS_BASE}</style><body>{conteudo}</body>"
 
     def _aba_evidencias(self, e: dict):
         pos  = 0
