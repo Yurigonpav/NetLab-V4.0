@@ -672,7 +672,29 @@ class DiagnosticoAvançado(QDialog):
             return {"ok": False, "texto": f"Erro no ping: {e}", "latencia_ms": None}
 
     def _descobrir_gateway(self) -> str:
-        """Tenta encontrar o IP do gateway via tabela ARP do sistema."""
+        """Tenta encontrar o gateway via tabela de rotas e, depois, via ARP filtrado por sub-rede."""
+
+        # ── 1. Prioridade: rota padrão (mais confiável) ─────────────────────
+        try:
+            saida = subprocess.check_output(
+                ["route", "print", "0.0.0.0"],
+                text=True,
+                timeout=4,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            m = re.search(
+                r'\s+0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)', saida
+            )
+            if m:
+                return m.group(1)
+        except Exception:
+            pass
+
+        # ── 2. Fallback: tabela ARP filtrada pela sub-rede do IP local ───────
+        desc_sel   = self.main.combo_interface.currentText()
+        ip_local   = self.main._mapa_interface_ip.get(desc_sel, "") or _obter_ip_local_seguro()
+        prefixo_24 = ".".join(ip_local.split(".")[:3]) + "." if ip_local else ""
+
         try:
             saida = subprocess.check_output(
                 ["arp", "-a"],
@@ -683,23 +705,13 @@ class DiagnosticoAvançado(QDialog):
             for linha in saida.splitlines():
                 m = re.search(r'(\d+\.\d+\.\d+\.(?:1|254))\s+', linha)
                 if m:
-                    return m.group(1)
+                    ip_cand = m.group(1)
+                    # Só aceita se estiver na mesma sub-rede /24 do IP local
+                    if not prefixo_24 or ip_cand.startswith(prefixo_24):
+                        return ip_cand
         except Exception:
             pass
 
-        # Fallback: route print
-        try:
-            saida = subprocess.check_output(
-                ["route", "print", "0.0.0.0"],
-                text=True,
-                timeout=4,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-            m = re.search(r'\s+0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)', saida)
-            if m:
-                return m.group(1)
-        except Exception:
-            pass
         return ""
 
     def _testar_dns(self) -> dict:

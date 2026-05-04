@@ -450,6 +450,9 @@ class PainelEventos(QWidget):
 
         self._montar_layout()
 
+        # Exibe a tela de boas-vindas no estado inicial
+        QTimer.singleShot(0, self._renderizar_boas_vindas)
+
     # ─────────────────────────────────────────────────────────
     # MONTAGEM DO LAYOUT PRINCIPAL
     # ─────────────────────────────────────────────────────────
@@ -674,6 +677,193 @@ class PainelEventos(QWidget):
         scroll.setWidget(self._conteudo)
         lay.addWidget(scroll, 1)
         return frame
+
+    def _renderizar_boas_vindas(self):
+        """Tela inicial exibida antes de qualquer evento ser selecionado."""
+        while self._lay_c.count() > 1:
+            it = self._lay_c.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+
+        # Reset cabeçalho
+        self._det_badge.setText("—")
+        self._det_badge.setStyleSheet(f"""
+            color: {_MUTED}; border: 1px solid {_BORDA}; border-radius: 3px;
+            padding: 1px 10px; font-family: Consolas, monospace;
+            font-size: 9px; font-weight: bold;
+        """)
+        self._det_titulo.setText("Modo Análise")
+        self._det_ts.setText("")
+        self._det_resumo.setText("Selecione um evento na lista para ver a análise detalhada")
+        self._lbl_status.setText("Aguardando seleção")
+
+        css = f"""
+            body {{
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 11px;
+                color: {_TEXTO};
+                line-height: 1.75;
+                margin: 0; padding: 0;
+                background: {_BG};
+            }}
+            b {{ color: {_ACCENT2}; font-weight: 600; }}
+            code {{
+                font-family: Consolas, monospace; font-size: 10px;
+                background: rgba(58,158,207,0.10); color: {_ACCENT2};
+                padding: 1px 4px; border-radius: 3px;
+            }}
+            .bloco {{
+                border: 1px solid {_BORDA2};
+                border-radius: 8px;
+                padding: 14px 16px;
+                margin: 0 0 12px 0;
+                background: rgba(255,255,255,0.02);
+            }}
+            .titulo-bloco {{
+                font-size: 9px;
+                font-weight: bold;
+                letter-spacing: 1.4px;
+                text-transform: uppercase;
+                color: {_MUTED};
+                margin-bottom: 10px;
+            }}
+            .aba {{
+                display: inline-block;
+                border: 1px solid {_BORDA2};
+                border-radius: 4px;
+                padding: 3px 10px;
+                font-size: 9px;
+                font-weight: bold;
+                letter-spacing: 0.6px;
+                margin-right: 6px;
+                color: {_TEXTO2};
+            }}
+            .proto {{
+                display: inline-block;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-family: Consolas, monospace;
+                font-size: 9px;
+                font-weight: bold;
+                margin: 2px 3px 2px 0;
+            }}
+            .linha {{
+                display: flex;
+                align-items: flex-start;
+                gap: 10px;
+                margin: 6px 0;
+                font-size: 11px;
+            }}
+            .dot {{
+                min-width: 6px; height: 6px;
+                border-radius: 50%;
+                margin-top: 5px;
+            }}
+        """
+
+        html = f"""
+        <style>{css}</style>
+        <body>
+        <div style="padding: 4px 0 20px 0;">
+
+          <div style="
+            margin-bottom: 20px;
+            padding: 18px 20px;
+            border: 1px solid rgba(58,158,207,0.22);
+            border-radius: 10px;
+            background: linear-gradient(135deg, rgba(58,158,207,0.07), rgba(58,158,207,0.02));
+          ">
+            <div style="font-size:13px; font-weight:600; color:{_TEXTO}; margin-bottom:6px;">
+              Como usar o Modo Análise
+            </div>
+            <div style="color:{_TEXTO2}; font-size:11px; line-height:1.7;">
+              Cada pacote capturado gera um <b>evento</b> na lista à esquerda.
+              Clique em qualquer evento para ver uma explicação detalhada sobre
+              o que aconteceu, como o protocolo funciona e o que significa
+              do ponto de vista de segurança.
+            </div>
+          </div>
+
+          <div class="bloco">
+            <div class="titulo-bloco">As três abas de análise</div>
+            <div class="linha">
+              <span class="aba" style="border-color:rgba(58,158,207,0.5); color:{_ACCENT};">ANÁLISE</span>
+              <span style="color:{_TEXTO2};">O que aconteceu e por quê — explicação em linguagem acessível, com contexto de segurança quando relevante.</span>
+            </div>
+            <div class="linha">
+              <span class="aba">EVIDÊNCIAS</span>
+              <span style="color:{_TEXTO2};">Campos técnicos do pacote capturado: IPs, portas, MAC, tamanho, headers HTTP e campos de formulário.</span>
+            </div>
+            <div class="linha">
+              <span class="aba">NA PRÁTICA</span>
+              <span style="color:{_TEXTO2};">Significado operacional do protocolo e o que fazer — comandos de diagnóstico, boas práticas e vetores de ataque.</span>
+            </div>
+          </div>
+
+          <div class="bloco">
+            <div class="titulo-bloco">Filtros por protocolo</div>
+            <div style="margin-bottom: 8px; color:{_TEXTO2}; font-size:11px;">
+              Use os badges no topo da lista para filtrar por tipo de tráfego:
+            </div>
+            <div>
+              <span class="proto" style="background:rgba(56,181,120,0.15); color:#38b578; border:1px solid rgba(56,181,120,0.3);">HTTPS</span>
+              <span class="proto" style="background:rgba(222,79,79,0.15); color:#de4f4f; border:1px solid rgba(222,79,79,0.3);">HTTP</span>
+              <span class="proto" style="background:rgba(58,158,207,0.15); color:{_ACCENT}; border:1px solid rgba(58,158,207,0.3);">DNS</span>
+              <span class="proto" style="background:rgba(207,131,42,0.15); color:#cf832a; border:1px solid rgba(207,131,42,0.3);">ARP</span>
+              <span class="proto" style="background:rgba(40,184,168,0.15); color:#28b8a8; border:1px solid rgba(40,184,168,0.3);">ICMP</span>
+              <span class="proto" style="background:rgba(139,105,192,0.15); color:#8b69c0; border:1px solid rgba(139,105,192,0.3);">SYN</span>
+              <span class="proto" style="background:rgba(28,156,133,0.15); color:#1c9c85; border:1px solid rgba(28,156,133,0.3);">DHCP</span>
+            </div>
+          </div>
+
+          <div class="bloco">
+            <div class="titulo-bloco">Níveis de alerta</div>
+            <div class="linha">
+              <div class="dot" style="background:{_INFO};"></div>
+              <span><b style="color:{_INFO};">INFO</b> — atividade normal de rede; conteúdo educativo sobre o protocolo.</span>
+            </div>
+            <div class="linha">
+              <div class="dot" style="background:#cf832a;"></div>
+              <span><b style="color:#cf832a;">AVISO</b> — protocolo intrinsecamente inseguro em uso (FTP, RDP, SMB) ou dado que merece atenção.</span>
+            </div>
+            <div class="linha">
+              <div class="dot" style="background:{_CRITICO};"></div>
+              <span><b style="color:{_CRITICO};">CRÍTICO</b> — evidência real de dado sensível exposto: credenciais, tokens ou padrão de ataque detectado.</span>
+            </div>
+          </div>
+
+          <div style="
+            padding: 12px 16px;
+            border-radius: 8px;
+            background: rgba(255,255,255,0.02);
+            border: 1px dashed {_BORDA};
+            color: {_MUTED};
+            font-size: 10px;
+            line-height: 1.6;
+          ">
+            Use a <b style="color:{_TEXTO2};">busca</b> no topo para filtrar por IP, domínio ou protocolo.
+            Duplo clique em um evento HTTP abre o payload completo com hexdump.
+            O histórico é preservado enquanto a captura estiver ativa.
+          </div>
+
+        </div>
+        </body>
+        """
+
+        tb = QTextBrowser()
+        tb.setOpenExternalLinks(False)
+        tb.setHtml(html)
+        tb.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        tb.setStyleSheet(f"""
+            QTextBrowser {{
+                background: {_BG};
+                border: none;
+                padding: 0;
+                color: {_TEXTO};
+            }}
+            {_SCROLL_SS}
+        """)
+        self._lay_c.insertWidget(0, tb)
 
     def _mk_header_detalhe(self) -> QFrame:
         """Cabeçalho compacto do painel de detalhe."""
@@ -1738,6 +1928,7 @@ class PainelEventos(QWidget):
         self._lbl_contagem.setText("0 / 0")
         self._lbl_contagem_global.setText("0 eventos")
         self._lbl_status.setText("Aguardando captura")
+        QTimer.singleShot(0, self._renderizar_boas_vindas)
 
         while self._lay_c.count() > 1:
             it = self._lay_c.takeAt(0)
