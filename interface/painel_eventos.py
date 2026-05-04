@@ -432,7 +432,7 @@ class PainelEventos(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self._todos_eventos = deque(maxlen=150)
+        self._todos_eventos = deque(maxlen=1500)  # Armazena eventos completos para filtragem
         self._evento_atual  = None
         self._filtro_proto  = "Todos"
         self._filtro_texto  = ""

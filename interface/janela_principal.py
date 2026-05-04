@@ -344,8 +344,8 @@ class DiagnosticoAvançado(QDialog):
         _checar(eh_admin,                    3, "Executar como Administrador")
         _checar(versao_npcap != "N/A",       3, "Npcap não instalado ou não detectado")
         _checar(versao_scapy != "N/A",       1, "Scapy não instalado")
-        _checar(info_dns["ok"],              1, "Resolução DNS falhou", "DNS lento" if info_dns["ok"] else "")
-        _checar(info_gateway["ok"],          1, "Gateway inacessível", "Latência alta ao gateway" if info_gateway.get("latencia_ms", 0) > 50 else "")
+        _checar(info_dns["ok"] and (info_dns.get("tempo_ms") or 0) <= 150, 1, "Resolução DNS falhou", "DNS lento" if info_dns["ok"] else "")
+        _checar(info_gateway["ok"] and (info_gateway.get("latencia_ms") or 0) <= 50, 1, "Gateway inacessível", "Latência alta ao gateway" if info_gateway["ok"] else "")
         _checar(info_iface.get("drops", 0) == 0, 1, "",
                 f"Drops detectados: {info_iface.get('drops', 0)} pacotes" if info_iface.get("drops", 0) > 0 else "")
 

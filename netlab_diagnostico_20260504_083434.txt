@@ -1,0 +1,26 @@
+============================================================
+NETLAB EDUCACIONAL — DIAGNÓSTICO COMPLETO
+Gerado em: 2026-05-04T08:34:18.395052
+============================================================
+
+[ SISTEMA ]
+  Python:         3.14.3
+  Sistema:        Windows 11
+  Scapy:          2.7.0
+  Npcap:          C:\Program Files\Npcap
+  Administrador:  Sim
+
+[ INTERFACE ]
+  Interface:  Intel(R) Ethernet Connection (17) I219-LM
+  Dispositivo:Ethernet
+  IP Local:   192.168.43.11
+
+[ CONECTIVIDADE ]
+  DNS:     google.com → 142.251.133.206 (5 ms)
+  Gateway: 192.168.10.1 — sem resposta (100% perda)
+
+[ SESSÃO DE CAPTURA ]
+  Pacotes:  8,973
+  Volume:   5578.2 KB
+
+============================================================
