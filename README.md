@@ -14,7 +14,6 @@
 [![PyQt6](https://img.shields.io/badge/PyQt6-6.x-41CD52?style=for-the-badge&logo=qt&logoColor=white)](https://pypi.org/project/PyQt6/)
 [![Scapy](https://img.shields.io/badge/Scapy-2.x-FF6B35?style=for-the-badge)](https://scapy.net)
 [![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://microsoft.com/windows)
-[![License](https://img.shields.io/badge/Licença-MIT-green?style=for-the-badge)](LICENSE)
 [![TCC](https://img.shields.io/badge/TCC-IFFar%20Uruguaiana-orange?style=for-the-badge)](https://iffarroupilha.edu.br)
 
 <br>
@@ -363,12 +362,6 @@ Zero risco de persistência acidental de dados sensíveis de alunos. O banco exi
 - **Requer Npcap:** o stack de captura depende do Npcap; o WinPcap nativo não é suportado nas versões recentes do Windows.
 - **Somente IPv4:** o analisador cobre exclusivamente tráfego IPv4; IPv6 é ignorado na versão atual.
 - **Windows apenas (primário):** o código tem compatibilidade parcial com Linux (rotas, interfaces), mas a UI e o instalador foram projetados para Windows 10/11.
-
----
-
-## Licença
-
-Distribuído sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para detalhes.
 
 ---
 
