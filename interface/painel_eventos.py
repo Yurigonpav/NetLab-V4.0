@@ -511,17 +511,6 @@ class PainelEventos(QWidget):
         """)
         l1.addWidget(lbl_titulo)
 
-        sep_v = QFrame()
-        sep_v.setFrameShape(QFrame.Shape.VLine)
-        sep_v.setFixedHeight(14)
-        sep_v.setStyleSheet(f"background: {_BORDA2}; border: none;")
-        l1.addWidget(sep_v)
-
-        self._lbl_contagem_global = QLabel("0 eventos")
-        self._lbl_contagem_global.setStyleSheet(
-            f"color: {_DIM}; font-family: Consolas; font-size: 9px;"
-        )
-        l1.addWidget(self._lbl_contagem_global)
         l1.addStretch()
 
         # Campo de busca com largura responsiva
@@ -1078,9 +1067,6 @@ class PainelEventos(QWidget):
 
         total = len(self._todos_eventos)
         self._lbl_contagem.setText(f"{visiveis} / {total}")
-        self._lbl_contagem_global.setText(
-            f"{total} evento{'s' if total != 1 else ''}"
-        )
 
     # ─────────────────────────────────────────────────────────
     # INSERÇÃO DE ITENS NA LISTA
@@ -1406,18 +1392,18 @@ class PainelEventos(QWidget):
                 ' Nenhum SNI capturado neste pacote (pode ser pacote de dados, não o handshake).'
             )
             conteudo = (
-                passo("①", "TCP Handshake",
+                passo("Passo 1", "TCP Handshake",
                       f'{ip(orig)} envia SYN para {ip(dest_porta)}. '
                       f'O servidor responde SYN-ACK e a conexão TCP é estabelecida.')
-                + passo("②", "TLS ClientHello",
+                + passo("Passo 2", "TLS ClientHello",
                         f'O cliente anuncia as cifras suportadas e envia o '
                         f'<b>SNI (Server Name Indication)</b> — único campo visível ao sniffer.'
                         + sni_info)
-                + passo("③", "Troca de chaves ECDHE",
+                + passo("Passo 3", "Troca de chaves ECDHE",
                         f'Cliente e servidor derivam uma chave de sessão efêmera. '
                         f'Com <b>Perfect Forward Secrecy</b>, nem a chave privada do servidor '
                         f'decripta sessões passadas.')
-                + passo("④", "Dados cifrados",
+                + passo("Passo 4", "Dados cifrados",
                         f'URL, headers, cookies e corpo trafegam completamente opacos. '
                         f'O sniffer só enxerga IPs, porta e tamanho dos pacotes.')
                 + caixa_captura([
@@ -1430,13 +1416,13 @@ class PainelEventos(QWidget):
 
         elif tipo == "HTTP":
             conteudo = (
-                passo("①", "Requisição em texto puro",
+                passo("Passo 1", "Requisição em texto puro",
                       f'{ip(orig)} envia GET/POST para {ip(dest_porta)} sem nenhuma criptografia. '
                       f'Método, URL, headers e corpo são completamente legíveis na rede.')
-                + passo("②", "Dados expostos",
+                + passo("Passo 2", "Dados expostos",
                         f'Qualquer dispositivo na mesma rede que capture este tráfego consegue ler '
                         f'credenciais, cookies de sessão, formulários e o conteúdo das páginas.')
-                + passo("③", "Resposta do servidor",
+                + passo("Passo 3", "Resposta do servidor",
                         f'Status HTTP (200 OK, 404, etc.), headers de resposta e corpo '
                         f'também trafegam em texto puro de volta para {ip(orig)}.')
                 + caixa_captura([
@@ -1454,14 +1440,14 @@ class PainelEventos(QWidget):
 
         elif tipo == "DNS":
             conteudo = (
-                passo("①", "Consulta DNS (query)",
+                passo("Passo 1", "Consulta DNS (query)",
                       f'{ip(orig)} não sabe o IP de {ip(dom) if dom else "um domínio"}. '
                       f'Envia uma query UDP para o servidor DNS {ip(dest)} na porta 53.')
-                + passo("②", "Resposta do servidor",
+                + passo("Passo 2", "Resposta do servidor",
                         f'O servidor DNS responde com registros A (IPv4) ou AAAA (IPv6) '
                         f'e um <b>TTL</b> que indica por quanto tempo o resultado pode ser cacheado.')
-                + passo("③", "Sem criptografia",
-                        f'Sem DoH (DNS over HTTPS) ou DoT (DNS over TLS), qualquer dispositivo '
+                + passo("Passo 3", "Sem criptografia",
+                        f'Sem DoH (DNS over HTTPS) or DoT (DNS over TLS), qualquer dispositivo '
                         f'na rede consegue ver todos os domínios que {ip(orig)} consulta — '
                         f'revelando intenção de navegação antes mesmo da conexão ser feita.')
                 + caixa_captura([
@@ -1478,15 +1464,15 @@ class PainelEventos(QWidget):
 
         elif tipo == "ARP":
             conteudo = (
-                passo("①", "Broadcast ARP",
+                passo("Passo 1", "Broadcast ARP",
                       f'{ip(orig)} precisa saber o MAC de um IP na rede local. '
                       f'Envia um broadcast <code>FF:FF:FF:FF:FF:FF</code> — '
                       f'todos os dispositivos da rede recebem essa pergunta.')
-                + passo("②", "Resposta ARP",
+                + passo("Passo 2", "Resposta ARP",
                         f'O dono do IP alvo responde com seu MAC address. '
                         f'{ip(orig)} registra o par IP→MAC na sua <b>ARP table</b> '
                         f'e passa a enviar frames diretamente para ele.')
-                + passo("③", "Sem autenticação",
+                + passo("Passo 3", "Sem autenticação",
                         f'O protocolo ARP não verifica a autenticidade das respostas. '
                         f'Qualquer dispositivo pode responder com um MAC falso (<b>ARP Spoofing</b>), '
                         f'desviando o tráfego de {ip(orig)} para um atacante.')
@@ -1504,14 +1490,14 @@ class PainelEventos(QWidget):
 
         elif tipo == "TCP_SYN":
             conteudo = (
-                passo("①", "SYN enviado",
+                passo("Passo 1", "SYN enviado",
                       f'{ip(orig)} inicia o 3-way handshake enviando um pacote com flag '
                       f'<b>SYN</b> para {ip(dest_porta)}. '
                       f'Isso reserva uma entrada na tabela de conexões do servidor.')
-                + passo("②", "Aguardando SYN-ACK",
+                + passo("Passo 2", "Aguardando SYN-ACK",
                         f'O servidor deve responder com <b>SYN-ACK</b>, confirmando que '
                         f'aceita a conexão. A conexão ainda não está estabelecida neste momento.')
-                + passo("③", "ACK completa o handshake",
+                + passo("Passo 3", "ACK completa o handshake",
                         f'{ip(orig)} responde com <b>ACK</b>. '
                         f'A conexão TCP está estabelecida e os dados podem fluir.')
                 + caixa_captura([
@@ -1528,15 +1514,15 @@ class PainelEventos(QWidget):
 
         elif tipo == "ICMP":
             conteudo = (
-                passo("①", "Pacote ICMP capturado",
+                passo("Passo 1", "Pacote ICMP capturado",
                       f'{ip(orig)} enviou um pacote ICMP para {ip(dest)}. '
                       f'ICMP é um protocolo de diagnóstico — não carrega dados de aplicação.')
-                + passo("②", "Tipos possíveis",
+                + passo("Passo 2", "Tipos possíveis",
                         f'<b>Echo Request/Reply</b> (ping): testa conectividade. '
                         f'<b>Time Exceeded</b>: TTL expirou em um roteador — '
                         f'base do <code>traceroute</code>. '
                         f'<b>Destination Unreachable</b>: destino inacessível.')
-                + passo("③", "TTL e fingerprinting",
+                + passo("Passo 3", "TTL e fingerprinting",
                         f'O valor de TTL do pacote revela o número de saltos percorridos '
                         f'e permite estimar o sistema operacional do remetente '
                         f'(Linux tipicamente parte de 64, Windows de 128).')
@@ -1549,16 +1535,16 @@ class PainelEventos(QWidget):
 
         elif tipo == "DHCP":
             conteudo = (
-                passo("①", "DISCOVER",
+                passo("Passo 1", "DISCOVER",
                       f'O dispositivo sem IP envia um broadcast para '
                       f'{ip("255.255.255.255")}: "Há algum servidor DHCP na rede?"')
-                + passo("②", "OFFER",
+                + passo("Passo 2", "OFFER",
                         f'O servidor DHCP {ip(dest)} responde com uma oferta: '
                         f'IP sugerido, máscara de sub-rede, gateway padrão e servidor DNS.')
-                + passo("③", "REQUEST",
+                + passo("Passo 3", "REQUEST",
                         f'O dispositivo aceita a oferta enviando REQUEST de volta '
                         f'ao servidor para confirmar o uso do IP proposto.')
-                + passo("④", "ACK",
+                + passo("Passo 4", "ACK",
                         f'O servidor confirma com ACK. O dispositivo passa a usar '
                         f'o IP recebido pelo tempo do <b>lease</b> definido na concessão.')
                 + caixa_captura([
@@ -1576,16 +1562,16 @@ class PainelEventos(QWidget):
 
         elif tipo == "SSH":
             conteudo = (
-                passo("①", "TCP Handshake",
+                passo("Passo 1", "TCP Handshake",
                       f'Conexão TCP estabelecida entre {ip(orig)} e {ip(dest_porta)}.')
-                + passo("②", "Negociação SSH",
+                + passo("Passo 2", "Negociação SSH",
                         f'Cliente e servidor anunciam a versão do protocolo (ex: SSH-2.0) '
                         f'e negociam algoritmos de cifra, MAC e troca de chaves — '
                         f'visível ao sniffer apenas neste momento inicial.')
-                + passo("③", "Autenticação cifrada",
+                + passo("Passo 3", "Autenticação cifrada",
                         f'Senha ou par de chaves (Ed25519 / RSA) são verificados '
                         f'dentro do canal já cifrado. O sniffer não vê as credenciais.')
-                + passo("④", "Sessão opaca",
+                + passo("Passo 4", "Sessão opaca",
                         f'Todos os comandos, saídas e arquivos transferidos trafegam '
                         f'completamente cifrados durante toda a sessão.')
                 + caixa_captura([
@@ -1598,15 +1584,15 @@ class PainelEventos(QWidget):
 
         elif tipo == "FTP":
             conteudo = (
-                passo("①", "Canal de controle (porta 21)",
+                passo("Passo 1", "Canal de controle (porta 21)",
                       f'{ip(orig)} conecta à porta 21 de {ip(dest)}. '
                       f'Todos os comandos — USER, PASS, LIST, RETR — '
                       f'trafegam em texto puro neste canal.')
-                + passo("②", "Credenciais expostas",
+                + passo("Passo 2", "Credenciais expostas",
                         f'O login (<code>USER nome_usuario</code> / <code>PASS senha</code>) '
                         f'é enviado literalmente em texto. '
                         f'Qualquer sniffer na rede captura as credenciais.')
-                + passo("③", "Canal de dados",
+                + passo("Passo 3", "Canal de dados",
                         f'Para transferir arquivos, o FTP abre uma segunda conexão '
                         f'(porta 20 em modo ativo, ou porta negociada em modo passivo). '
                         f'Os arquivos também trafegam sem criptografia.')
@@ -1624,15 +1610,15 @@ class PainelEventos(QWidget):
 
         elif tipo == "SMB":
             conteudo = (
-                passo("①", "Negociação de protocolo",
+                passo("Passo 1", "Negociação de protocolo",
                       f'{ip(orig)} conecta a {ip(dest_porta)} e negocia a versão SMB '
                       f'(SMBv1, SMBv2 ou SMBv3). A versão negociada determina '
                       f'o nível de segurança da sessão.')
-                + passo("②", "Autenticação NTLM/Kerberos",
+                + passo("Passo 2", "Autenticação NTLM/Kerberos",
                         f'Cliente e servidor realizam o desafio de autenticação. '
                         f'Sem SMB Signing, o hash NTLM pode ser capturado e usado '
                         f'em ataques de relay sem precisar decriptar a senha.')
-                + passo("③", "Acesso ao compartilhamento",
+                + passo("Passo 3", "Acesso ao compartilhamento",
                         f'Após autenticação, {ip(orig)} pode ler, escrever e executar '
                         f'arquivos no servidor conforme as permissões configuradas.')
                 + caixa_captura([
@@ -1648,14 +1634,14 @@ class PainelEventos(QWidget):
 
         elif tipo == "RDP":
             conteudo = (
-                passo("①", "TCP Handshake",
+                passo("Passo 1", "TCP Handshake",
                       f'{ip(orig)} inicia conexão TCP com {ip(dest_porta)} (porta padrão 3389).')
-                + passo("②", "Negociação TLS",
+                + passo("Passo 2", "Negociação TLS",
                         f'RDP moderno usa TLS para cifrar a sessão. '
                         f'<b>Sem NLA:</b> a tela de login é renderizada remotamente antes '
                         f'da autenticação — expande a superfície de ataque. '
                         f'<b>Com NLA:</b> autenticação ocorre antes de qualquer renderização.')
-                + passo("③", "Sessão de área de trabalho",
+                + passo("Passo 3", "Sessão de área de trabalho",
                         f'Teclado, mouse e tela são transmitidos pelo protocolo RDP '
                         f'dentro do canal TLS. A porta 3389 exposta na internet '
                         f'é alvo constante de bots de força bruta.')
@@ -1677,14 +1663,14 @@ class PainelEventos(QWidget):
                 'MAC não capturado neste evento.'
             )
             conteudo = (
-                passo("①", "Detecção de entrada",
+                passo("Passo 1", "Detecção de entrada",
                       f'Um dispositivo com IP {ip(orig)} foi identificado pela primeira vez '
                       f'na rede. A detecção ocorre via ARP, DHCP ou outros protocolos '
                       f'que revelam o endereço MAC do dispositivo.')
-                + passo("②", "Identificação pelo OUI",
+                + passo("Passo 2", "Identificação pelo OUI",
                         mac_info + ' Ferramentas como <code>arp-scan</code> ou bases '
                         'OUI públicas (IEEE) permitem identificar o fabricante em segundos.')
-                + passo("③", "Risco em redes sem controle de acesso",
+                + passo("Passo 3", "Risco em redes sem controle de acesso",
                         f'Em redes sem 802.1X, qualquer dispositivo com acesso físico '
                         f'ou acesso à rede Wi-Fi entra livremente e recebe IP via DHCP. '
                         f'Não há verificação de identidade ou autorização prévia.')
@@ -1702,11 +1688,11 @@ class PainelEventos(QWidget):
         else:
             # Protocolo genérico — exibe dados disponíveis de forma organizada
             conteudo = (
-                passo("①", "Pacote capturado",
+                passo("Passo 1", "Pacote capturado",
                       f'O sniffer capturou tráfego de {ip(orig)} para {ip(dest_porta)}. '
                       f'O protocolo <b>{tipo or "desconhecido"}</b> foi identificado '
                       f'com base nas portas e no conteúdo do pacote.')
-                + passo("②", "Dados do fluxo",
+                + passo("Passo 2", "Dados do fluxo",
                         f'Tamanho do payload capturado: <b>{tam_s}</b>. '
                         f'Analise a aba <b>Evidências</b> para ver os campos completos do pacote.')
                 + caixa_captura([
@@ -1897,9 +1883,6 @@ class PainelEventos(QWidget):
         visiveis = sum(1 for _, it, _ in self._item_map if not it.isHidden())
         total    = len(self._todos_eventos)
         self._lbl_contagem.setText(f"{visiveis} / {total}")
-        self._lbl_contagem_global.setText(
-            f"{total} evento{'s' if total != 1 else ''}"
-        )
 
     def limpar(self):
         """Reseta completamente o painel, removendo todos os eventos."""
@@ -1926,7 +1909,6 @@ class PainelEventos(QWidget):
             font-weight: bold;
         """)
         self._lbl_contagem.setText("0 / 0")
-        self._lbl_contagem_global.setText("0 eventos")
         self._lbl_status.setText("Aguardando captura")
         QTimer.singleShot(0, self._renderizar_boas_vindas)
 

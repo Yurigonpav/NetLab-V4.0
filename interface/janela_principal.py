@@ -138,12 +138,7 @@ class DiagnosticoAvançado(QDialog):
 
         # Cache dos resultados para exportação
         self._ultimo_relatorio: dict = {}
-
         self._construir_ui()
-
-        # Timer de auto-refresh
-        self._timer_auto = QTimer(self)
-        self._timer_auto.timeout.connect(self.atualizar)
 
         # Primeira atualização ao abrir
         QTimer.singleShot(100, self.atualizar)
@@ -237,17 +232,17 @@ class DiagnosticoAvançado(QDialog):
         self._barra_saude = QProgressBar()
         self._barra_saude.setRange(0, 10)
         self._barra_saude.setValue(0)
-        self._barra_saude.setFixedHeight(14)
+        self._barra_saude.setFixedHeight(20)
         self._barra_saude.setTextVisible(False)
         self._barra_saude.setStyleSheet("""
             QProgressBar {
                 background: #1a2540;
-                border-radius: 7px;
+                border-radius: 10px;
                 border: none;
             }
             QProgressBar::chunk {
                 background: #2ecc71;
-                border-radius: 7px;
+                border-radius: 10px;
             }
         """)
         linha_saude.addWidget(self._barra_saude, 1)
@@ -255,7 +250,7 @@ class DiagnosticoAvançado(QDialog):
         self._lbl_placar = QLabel("0 / 0")
         self._lbl_placar.setFixedWidth(48)
         self._lbl_placar.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self._lbl_placar.setStyleSheet(f"color: {self._COR_DIM}; font-family: Consolas; font-size: 10px;")
+        self._lbl_placar.setStyleSheet(f"color: {self._COR_DIM}; font-family: Consolas; font-size: 9px;")
         linha_saude.addWidget(self._lbl_placar)
         lay.addLayout(linha_saude)
 
@@ -265,9 +260,6 @@ class DiagnosticoAvançado(QDialog):
         lay = QHBoxLayout()
         lay.setSpacing(8)
 
-        self._chk_auto = QCheckBox("Atualizar a cada 3 s")
-        self._chk_auto.toggled.connect(self._ao_alternar_auto_refresh)
-        lay.addWidget(self._chk_auto)
         lay.addStretch()
 
         btn_exportar = QPushButton("Exportar .txt")
@@ -815,14 +807,6 @@ class DiagnosticoAvançado(QDialog):
             f"<div style='color:{cor}; padding:2px 0; font-size:11px;'>"
             f"<span style='font-weight:bold;'>{icone}</span>&nbsp;&nbsp;{texto}{extra}</div>"
         )
-
-    # ── Auto-refresh ─────────────────────────────────────────────────────
-
-    def _ao_alternar_auto_refresh(self, ativo: bool):
-        if ativo:
-            self._timer_auto.start(3000)
-        else:
-            self._timer_auto.stop()
 
     # ── Exportação ───────────────────────────────────────────────────────
 

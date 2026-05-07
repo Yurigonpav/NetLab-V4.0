@@ -284,24 +284,38 @@ class MotorPedagogico:
         fluxo   = self._fluxo(origem, "DNS/UDP 53", destino)
 
         n1 = (
-            f"O dispositivo <b>{origem}</b> está perguntando ao servidor DNS "
-            f"<b>{destino}</b> qual é o endereço IP de "
+            f"O dispositivo <b>{origem}</b> consulta o servidor DNS "
+            f"<b>{destino}</b> para descobrir o endereço IP de "
             f"<b style='color:#3498DB;'>{dominio or 'um domínio'}</b>.<br><br>"
-            f"Esse processo se chama <b>resolução de nomes</b> e acontece antes "
-            f"de qualquer conexão com um site. Funciona como uma lista telefônica: "
-            f"você sabe o nome, o DNS te dá o número (IP)."
+            f"Esta consulta precede qualquer conexão de rede: antes de alcançar "
+            f"um servidor, o sistema operacional precisa converter o nome de domínio "
+            f"em um endereço IP roteável. Sem essa resposta, o pacote não tem destino. "
+            f"É a primeira coisa que acontece quando você digita uma URL no navegador "
+            f"ou qualquer aplicação tenta alcançar um host pela internet."
         )
 
         n2 = (
             f"<b>Protocolo:</b> DNS sobre UDP porta {porta} — pacote de {tamanho} bytes.<br>"
             f"<b>Servidor consultado:</b> <code>{destino}</code><br>"
             f"<b>Domínio:</b> <code style='color:#3498DB;'>{dominio or '—'}</code><br><br>"
-            f"<b>Como funciona o DNS:</b> a consulta sai em texto puro (UDP). "
-            f"Qualquer dispositivo na mesma rede pode ver quais domínios você acessa. "
-            f"Alternativas que cifram a consulta: "
-            f"<b>DNS over HTTPS (DoH)</b> — porta 443 — e "
-            f"<b>DNS over TLS (DoT)</b> — porta 853. "
-            f"O DNS tradicional também é vulnerável a <b>cache poisoning</b> sem DNSSEC."
+            f"<b>Por que UDP e não TCP?</b> Consultas DNS são pequenas (geralmente abaixo "
+            f"de 512 bytes) e velocidade importa mais que confiabilidade — se a resposta "
+            f"se perder, o sistema tenta de novo. UDP elimina o overhead do handshake TCP.<br><br>"
+            f"<b>Hierarquia da resolução:</b> se o servidor local não souber, consulta "
+            f"um <b>servidor raiz</b> → o <b>servidor TLD</b> (.com, .br, .org) "
+            f"→ o <b>servidor autoritativo</b> do domínio. O resultado fica em cache "
+            f"pelo tempo definido no campo TTL do registro DNS.<br><br>"
+            f"<b>Visibilidade no tráfego:</b> a consulta trafega em texto puro e sem "
+            f"autenticação. Qualquer dispositivo no caminho entre {origem} e {destino} "
+            f"— incluindo outros hosts no mesmo segmento Wi-Fi — pode registrar "
+            f"exatamente quais domínios este host está acessando, sem precisar "
+            f"invadir nenhum sistema.<br><br>"
+            f"<b>Alternativas que cifram:</b> <b>DNS over HTTPS (DoH)</b> porta 443 e "
+            f"<b>DNS over TLS (DoT)</b> porta 853 ocultam os nomes consultados do "
+            f"tráfego observável. O DNS convencional é vulnerável a "
+            f"<b>DNS spoofing</b> e <b>cache poisoning</b>; o <b>DNSSEC</b> adiciona "
+            f"assinaturas digitais nos registros para validar autenticidade, "
+            f"mas não cifra a consulta em si."
         )
 
         campos = [
@@ -443,11 +457,15 @@ class MotorPedagogico:
             bloco_exp = ""
 
         n1 = (
-            f"O dispositivo <b>{origem}</b> fez uma requisição "
+            f"O dispositivo <b>{origem}</b> enviou uma requisição "
             f"<b>{metodo}</b> para <b style='color:#E74C3C;'>{alvo}</b> "
-            f"usando <b style='color:#E74C3C;'>HTTP sem criptografia</b>.<br><br>"
-            f"HTTP transmite tudo em texto puro — URL, cabeçalhos e corpo "
-            f"são visíveis para qualquer dispositivo na mesma rede."
+            f"usando <b style='color:#E74C3C;'>HTTP — protocolo sem criptografia</b>.<br><br>"
+            f"Em HTTP, todos os dados transitam em texto ASCII legível: a URL completa, "
+            f"os cabeçalhos, os cookies e o corpo da requisição são capturáveis por "
+            f"qualquer dispositivo presente no caminho entre cliente e servidor — "
+            f"roteadores, switches, pontos de acesso Wi-Fi ou outros hosts no mesmo "
+            f"segmento de rede. Não é necessário nenhum ataque ativo; "
+            f"captura passiva com Wireshark já é suficiente para ler tudo."
             + bloco_exp
         )
 
@@ -481,8 +499,12 @@ class MotorPedagogico:
             + (f"<br><b>User-Agent:</b> {_escape(ua)}" if ua else "")
             + (f"<br><b>TTL:</b> {ttl} → {_estimar_os(ttl)}" if ttl else "")
             + aviso_headers
-            + f"<br><br><b>Com HTTPS</b> toda esta requisição seria cifrada — "
-            f"URL, headers e corpo ficariam ilegíveis para capturadores."
+            + f"<br><br><b>O que muda com HTTPS:</b> toda esta requisição — "
+            f"incluindo a URL <code>{_escape(caminho)}</code>, os cabeçalhos e o corpo — "
+            f"seria cifrada com AES antes de sair do socket. "
+            f"Um capturador na rede veria apenas bytes aleatórios sem nenhuma informação utilizável. "
+            f"Com HTTP, cada campo desta requisição está disponível em texto puro "
+            f"para qualquer dispositivo no caminho de {origem} até {alvo}."
         )
 
         # ── Nível 3: Evidência ───────────────────────────────────────────────
@@ -596,11 +618,17 @@ class MotorPedagogico:
             fase = "TLS ClientHello — SNI extraído"
 
         n1 = (
-            f"O dispositivo <b>{origem}</b> acessa "
-            f"<b style='color:#2ECC71;'>{alvo}</b> com <b>HTTPS</b>.<br><br>"
-            f"O TLS cifra todo o conteúdo — headers, corpo, cookies e credenciais "
-            f"ficam <b>ilegíveis para qualquer capturador</b> na rede. "
-            f"O sniffer só enxerga IPs, porta e o SNI (nome do host no certificado)."
+            f"O dispositivo <b>{origem}</b> estabelece conexão com "
+            f"<b style='color:#2ECC71;'>{alvo}</b> utilizando <b>HTTPS</b>.<br><br>"
+            f"O HTTPS não é um protocolo separado — é HTTP transportado sobre "
+            f"<b>TLS (Transport Layer Security)</b>. Antes de qualquer dado HTTP "
+            f"trafegar, cliente e servidor executam um <b>handshake TLS</b>: "
+            f"trocam certificados, negociam algoritmos criptográficos e derivam "
+            f"chaves de sessão simétricas. A partir daí, tudo — URL completa, "
+            f"headers, corpo, cookies e credenciais — flui cifrado. "
+            f"Um capturador na rede enxerga apenas IPs, porta 443 e, durante o "
+            f"ClientHello, o <b>SNI</b> (Server Name Indication) — que revela "
+            f"o nome do host, mas não o que está sendo acessado nele."
         )
 
         n2 = (
@@ -608,13 +636,22 @@ class MotorPedagogico:
             + (f"<b>Fase:</b> {fase}<br>" if fase else "")
             + (f"<b>SNI:</b> <code style='color:#2ECC71;'>{sni}</code><br>" if sni else "")
             + f"<b>Tamanho do pacote:</b> {tamanho} bytes<br><br>"
-            f"<b>Como o TLS protege:</b> durante o handshake, cliente e servidor "
-            f"negociam uma chave de sessão efêmera (ECDHE). Com <b>Perfect Forward "
-            f"Secrecy</b>, mesmo que a chave privada do servidor vaze no futuro, "
-            f"sessões passadas permanecem protegidas.<br><br>"
-            f"<b>O que ainda é visível:</b> endereço IP do servidor, porta (443) "
-            f"e o SNI no ClientHello. Para ocultar também o SNI, use "
-            f"<b>Encrypted Client Hello (ECH)</b> — suportado em HTTP/3."
+            f"<b>Como o handshake TLS funciona na prática:</b><br>"
+            f"1. <b>ClientHello</b>: o cliente anuncia versões TLS suportadas e conjuntos de cifras<br>"
+            f"2. <b>ServerHello + Certificado</b>: o servidor escolhe os algoritmos "
+            f"e envia seu certificado X.509 para autenticação<br>"
+            f"3. <b>Troca de chaves (ECDHE)</b>: cliente e servidor derivam "
+            f"uma chave de sessão compartilhada sem jamais transmiti-la diretamente<br>"
+            f"4. <b>Canal cifrado</b>: toda a comunicação HTTP passa dentro do túnel TLS<br><br>"
+            f"<b>Perfect Forward Secrecy:</b> com ECDHE, cada sessão usa uma chave "
+            f"efêmera e independente. Se a chave privada do servidor vazar no futuro, "
+            f"sessões passadas gravadas permanecem completamente indecifráveis — "
+            f"ao contrário de cifras RSA estáticas, onde uma única chave comprometida "
+            f"poderia desfazer todo o histórico de sessões capturadas.<br><br>"
+            f"<b>O que ainda é visível para um capturador:</b> endereço IP de "
+            f"destino, porta 443 e o SNI no ClientHello. Para ocultar também o SNI, "
+            f"o padrão <b>Encrypted Client Hello (ECH)</b> cifra essa informação "
+            f"— disponível em HTTP/3 com QUIC."
         )
 
         campos = [
@@ -645,32 +682,45 @@ class MotorPedagogico:
 
         if op == "request":
             n1 = (
-                f"<b>{origem}</b> enviou um broadcast ARP perguntando: "
-                f"<i>'Quem tem o IP <b>{destino}</b>? Me informe seu MAC.'</i><br><br>"
-                f"Isso é comportamento normal — ocorre toda vez que um dispositivo "
-                f"precisa se comunicar com outro na mesma rede local e ainda não "
-                f"conhece seu endereço físico."
+                f"<b>{origem}</b> envia um <b>broadcast ARP Request</b> para toda a "
+                f"rede local perguntando: <i>'Quem possui o IP <b>{destino}</b>? "
+                f"Envie-me seu endereço MAC.'</i><br><br>"
+                f"O broadcast vai para <code>FF:FF:FF:FF:FF:FF</code> — todos os "
+                f"dispositivos na rede o recebem, mas apenas o dono do IP responde. "
+                f"Isso ocorre porque a comunicação na camada Ethernet (Camada 2) "
+                f"exige o endereço físico do destino — o IP sozinho não é suficiente "
+                f"para montar um quadro Ethernet e entregá-lo ao próximo hop."
             )
         else:
             n1 = (
-                f"<b>{origem}</b> respondeu ao ARP: "
-                f"<i>'O IP <b>{destino}</b> está em {mac_src}.'</i><br><br>"
-                f"Isso é normal quando o dispositivo recebeu um ARP Request "
-                f"direcionado ao seu IP."
+                f"<b>{origem}</b> responde ao ARP Request declarando: "
+                f"<i>'O IP <b>{destino}</b> pertence a <code>{mac_src}</code> — sou eu.'</i><br><br>"
+                f"Esta resposta unicast é entregue diretamente ao host que fez a "
+                f"pergunta, que armazena o mapeamento IP→MAC em sua <b>tabela ARP</b> "
+                f"local (<code>arp -a</code>) para não precisar repetir a consulta "
+                f"a cada pacote enviado para este destino."
             )
 
         n2 = (
-            f"<b>Como o ARP funciona:</b> ao iniciar uma comunicação, "
-            f"o dispositivo verifica sua tabela ARP local (<code>arp -a</code>). "
-            f"Se o IP não estiver mapeado, envia um broadcast para toda a rede.<br><br>"
+            f"<b>Por que o ARP existe:</b> o protocolo IP opera na Camada 3 com "
+            f"endereços lógicos. A Ethernet (Camada 2) usa endereços físicos (MAC). "
+            f"Quando a pilha IP precisa entregar um pacote, precisa descobrir qual "
+            f"MAC corresponde ao IP destino no segmento local — o ARP faz essa "
+            f"tradução dinâmica, mantendo um cache que expira em 60–120 segundos.<br><br>"
             f"<b>MAC de origem:</b> <code>{mac_src}</code>"
             + (f" — <b>{fab}</b>" if fab else "")
-            + f"<br><b>IP buscado:</b> {destino}<br><br>"
-            f"<b>Contexto de segurança:</b> o ARP não possui autenticação. "
-            f"Um atacante pode enviar respostas ARP falsas (<i>ARP spoofing</i>) "
-            f"para redirecionar tráfego. Em redes domésticas isso raramente ocorre; "
-            f"em redes corporativas, switches gerenciados com <b>Dynamic ARP "
-            f"Inspection (DAI)</b> previnem esse ataque."
+            + f"<br><b>IP mapeado:</b> {destino}<br><br>"
+            f"<b>ARP Spoofing — o ataque Man-in-the-Middle local:</b> como o ARP "
+            f"não possui nenhuma autenticação, qualquer dispositivo pode enviar "
+            f"respostas ARP não solicitadas (<i>gratuitous ARP</i>), "
+            f"envenenando a tabela de outros hosts. O resultado: o tráfego "
+            f"destinado a {destino} pode ser desviado para o host do atacante — "
+            f"que o repassa ao destino real sem que nenhuma das partes perceba. "
+            f"Esta é a base técnica de ataques MitM em redes locais.<br><br>"
+            f"<b>Mitigação:</b> <b>Dynamic ARP Inspection (DAI)</b> em switches "
+            f"gerenciados valida cada resposta ARP contra a tabela de concessões "
+            f"DHCP confiáveis, descartando respostas que não correspondam ao par "
+            f"IP/MAC registrado — bloqueando o spoofing na origem."
         )
 
         campos = [
@@ -714,25 +764,41 @@ class MotorPedagogico:
         }.get(porta, "")
 
         n1 = (
-            f"<b>{origem}</b> está iniciando uma conexão TCP com "
-            f"<b>{destino}</b> na porta <b>{porta}</b>"
-            + (f" — serviço típico: <b>{servico}</b>" if servico else "")
+            f"<b>{origem}</b> dispara o primeiro passo do "
+            f"<b>three-way handshake TCP</b> em direção a "
+            f"<b>{destino}</b>, porta <b>{porta}</b>"
+            + (f" — serviço esperado: <b>{servico}</b>" if servico else "")
             + f".<br><br>"
-            f"O TCP usa um <b>three-way handshake</b> (3 etapas) antes de "
-            f"transmitir qualquer dado, garantindo que ambos os lados estejam "
-            f"prontos para comunicar."
+            f"O pacote SYN (synchronize) não transfere dados — sua função é "
+            f"anunciar ao servidor: <i>'quero me conectar, e este é meu número "
+            f"de sequência inicial (ISN)'</i>. O servidor ainda não abriu sessão "
+            f"alguma; apenas enfileirou esta requisição em sua tabela de "
+            f"conexões TCP incompletas aguardando o passo seguinte."
         )
 
         n2 = (
             f"<b>Etapa 1/3 — SYN</b>: {origem} → {destino}:{porta}<br>"
-            + (f"<b>OS estimado pelo TTL:</b> {os_info}<br>" if os_info else "")
+            + (f"<b>OS estimado pelo TTL ({ttl}):</b> {os_info}<br>" if os_info and ttl else "")
             + f"<b>Tamanho do pacote:</b> {tamanho} bytes<br><br>"
-            f"<b>Próximas etapas:</b> SYN-ACK (servidor responde) → "
-            f"ACK (cliente confirma) → conexão estabelecida.<br><br>"
-            f"<b>Flags TCP:</b> cada bit tem um papel — SYN inicia, ACK confirma, "
-            f"FIN encerra educadamente, RST interrompe abruptamente. "
-            f"Um flood de SYNs sem ACK é o ataque <b>SYN Flood</b>, que esgota "
-            f"a tabela de conexões do servidor."
+            f"<b>O three-way handshake completo:</b><br>"
+            f"→ <b>SYN</b>: cliente envia número de sequência inicial aleatório (ISN)<br>"
+            f"→ <b>SYN-ACK</b>: servidor responde com seu próprio ISN "
+            f"e confirma o ISN do cliente<br>"
+            f"→ <b>ACK</b>: cliente confirma o ISN do servidor; "
+            f"conexão bidirecional estabelecida<br><br>"
+            f"<b>Por que três vias?</b> Para que ambos os lados confirmem "
+            f"seus números de sequência e capacidades antes de transmitir dados — "
+            f"garantindo entrega ordenada, sem duplicatas e com controle de fluxo.<br><br>"
+            f"<b>Estimativa de SO pelo TTL:</b> sistemas operacionais definem "
+            f"valores padrão de TTL ao originar pacotes (Windows: 128, Linux/macOS: 64). "
+            f"Subtraindo o TTL observado ({ttl or '?'}) do padrão mais provável, "
+            f"estima-se quantos roteadores o pacote atravessou até ser capturado.<br><br>"
+            f"<b>Vetor de ataque — SYN Flood:</b> um atacante envia milhares de SYNs "
+            f"com IPs de origem forjados. O servidor aloca recursos para cada conexão "
+            f"incompleta e nunca recebe o ACK final, esgotando sua tabela de "
+            f"half-open connections. <b>SYN cookies</b> resolvem isso codificando "
+            f"o estado da conexão no ISN do SYN-ACK, sem alocar recursos "
+            f"antes do ACK chegar."
         )
 
         campos = [
@@ -760,19 +826,31 @@ class MotorPedagogico:
         fluxo   = self._fluxo(origem, "TCP FIN", destino)
 
         n1 = (
-            f"<b>{origem}</b> está encerrando a conexão TCP com <b>{destino}</b> "
-            f"de forma educada, usando a flag <b>FIN</b>.<br><br>"
-            f"O FIN garante que todos os dados pendentes sejam entregues antes "
-            f"do fechamento, ao contrário do RST que interrompe imediatamente."
+            f"<b>{origem}</b> sinaliza o encerramento ordenado da sessão TCP "
+            f"com <b>{destino}</b> enviando a flag <b>FIN</b> (finish).<br><br>"
+            f"Diferente de um corte abrupto, o FIN inicia um processo negociado "
+            f"de quatro vias: garante que todos os dados em trânsito sejam "
+            f"entregues antes de liberar os recursos da conexão. "
+            f"O host que envia o FIN indica que não tem mais dados a transmitir — "
+            f"mas ainda pode receber dados do outro lado até que este também envie seu FIN."
         )
 
         n2 = (
             f"<b>Encerramento TCP em 4 etapas:</b><br>"
-            f"1. FIN (cliente) → 2. ACK (servidor) → "
-            f"3. FIN (servidor) → 4. ACK (cliente)<br><br>"
-            f"Após o último ACK, o socket permanece em estado "
-            f"<b>TIME_WAIT</b> por ~60 segundos para absorver pacotes "
-            f"atrasados que possam chegar fora de ordem."
+            f"1. <b>FIN</b> ({origem} → {destino}): 'não tenho mais dados a enviar'<br>"
+            f"2. <b>ACK</b> ({destino} → {origem}): 'recebi seu FIN'<br>"
+            f"3. <b>FIN</b> ({destino} → {origem}): 'eu também terminei'<br>"
+            f"4. <b>ACK</b> ({origem} → {destino}): 'confirmado — conexão encerrada'<br><br>"
+            f"<b>Estado TIME_WAIT:</b> após o último ACK, o socket permanece em "
+            f"TIME_WAIT por aproximadamente 2×MSL (Maximum Segment Lifetime, ~60s). "
+            f"O objetivo: garantir que pacotes atrasados da sessão encerrada não "
+            f"contaminem uma nova conexão com o mesmo par IP:porta. "
+            f"Em servidores de alto volume, TIME_WAIT excessivo pode esgotar "
+            f"as portas efêmeras disponíveis — ajustável via "
+            f"<code>tcp_tw_reuse</code> no Linux.<br><br>"
+            f"<b>FIN vs RST:</b> o FIN negocia o encerramento garantindo entrega "
+            f"dos dados pendentes. O RST é um corte imediato — qualquer dado "
+            f"não confirmado é descartado sem entrega."
         )
 
         n3 = _tabela([
@@ -797,17 +875,31 @@ class MotorPedagogico:
 
         n1 = (
             f"A conexão de <b>{origem}</b> com <b>{destino}:{porta}</b> "
-            f"foi <b>recusada abruptamente</b> com a flag RST.<br><br>"
-            f"Causas comuns: porta fechada no destino, firewall bloqueando "
-            f"ou serviço indisponível no momento."
+            f"foi encerrada abruptamente pela flag <b>RST</b> (reset).<br><br>"
+            f"O RST não negocia — ele termina a conexão imediatamente, "
+            f"descartando qualquer dado em trânsito. "
+            f"É enviado quando o destinatário não reconhece a conexão, "
+            f"quando não há serviço ouvindo na porta solicitada, "
+            f"ou quando uma aplicação decide rejeitar a sessão sem aguardar."
         )
 
         n2 = (
-            f"<b>RST vs FIN:</b> o FIN encerra com negociação, o RST "
-            f"interrompe sem entregar dados pendentes.<br><br>"
-            f"<b>Quando investigar:</b> RSTs frequentes na mesma porta "
-            f"de múltiplas origens podem indicar <b>port scanning</b>. "
-            f"Um único RST é comportamento normal de rejeição de conexão."
+            f"<b>Causas mais comuns de um RST:</b><br>"
+            f"• Porta <b>{porta}</b> fechada em {destino} — "
+            f"o kernel rejeita automaticamente com RST<br>"
+            f"• Firewall com regra REJECT (diferente de DROP, "
+            f"que simplesmente descarta sem responder)<br>"
+            f"• Serviço encerrado enquanto havia sessão ativa<br>"
+            f"• Aplicação detectou estado inválido e decidiu abortar<br><br>"
+            f"<b>RST vs FIN:</b> o FIN negocia o encerramento em 4 etapas, "
+            f"garantindo entrega dos dados pendentes. "
+            f"O RST é um corte imediato — dados não confirmados são perdidos.<br><br>"
+            f"<b>RST como indicador de varredura de portas:</b> se {origem} "
+            f"recebe múltiplos RSTs em sequência rápida, cada um de uma porta "
+            f"diferente de {destino}, isso revela que as portas estão fechadas — "
+            f"exatamente o padrão que ferramentas como Nmap observam ao mapear "
+            f"um host. Um único RST é comportamento normal de rejeição; "
+            f"dezenas em poucos segundos indicam varredura ativa."
         )
 
         n3 = _tabela([
@@ -842,21 +934,38 @@ class MotorPedagogico:
                 pass
 
         n1 = (
-            f"<b>{origem}</b> está testando se <b>{destino}</b> está acessível "
-            f"e medindo a latência da conexão via <b>ping</b>.<br><br>"
-            f"O ICMP Echo é a ferramenta básica de diagnóstico de rede — "
-            f"o equivalente a 'bater na porta e esperar resposta'."
+            f"<b>{origem}</b> envia um <b>ICMP Echo Request</b> para "
+            f"<b>{destino}</b> — o clássico comando <code>ping</code>.<br><br>"
+            f"O ICMP (Internet Control Message Protocol) não é um protocolo "
+            f"de transporte de dados: é a <b>camada de diagnóstico e controle "
+            f"do protocolo IP</b>. O Echo Request/Reply testa alcançabilidade e "
+            f"mede latência, mas o ICMP também carrega mensagens críticas como "
+            f"'destino inacessível', 'TTL expirado' e 'fragmentação necessária' — "
+            f"informações que os próprios roteadores usam para reportar "
+            f"problemas na rede."
         )
 
         n2 = (
-            f"<b>Protocolo:</b> ICMP Echo Request → Echo Reply<br>"
-            + (f"<b>TTL:</b> {ttl} → ~{saltos} salto(s) até o destino<br>" if saltos is not None else "")
+            f"<b>Protocolo:</b> ICMP tipo 8 (Echo Request) / tipo 0 (Echo Reply)<br>"
+            + (f"<b>TTL observado:</b> {ttl} → ~{saltos} salto(s) percorrido(s)<br>" if saltos is not None else "")
             + (f"<b>OS estimado:</b> {os_info}<br>" if os_info else "")
             + f"<b>Tamanho:</b> {tamanho} bytes<br><br>"
-            f"<b>O TTL (Time To Live)</b> começa com um valor padrão e é "
-            f"decrementado em 1 a cada roteador. Se chegar a 0, o pacote é "
-            f"descartado e um ICMP 'Time Exceeded' é enviado de volta — "
-            f"é assim que o <b>traceroute</b> funciona."
+            f"<b>Como o TTL revela a topologia:</b> o TTL começa com um valor "
+            f"padrão definido pelo sistema operacional e é decrementado em 1 "
+            f"por cada roteador. Se o padrão é 64 e o valor observado é "
+            f"{ttl or '?'}, o pacote percorreu ~{saltos or '?'} salto(s). "
+            f"O <b>traceroute</b> explora exatamente isso: envia ICMPs com TTL=1, "
+            f"depois TTL=2 etc., forçando cada roteador a enviar "
+            f"'ICMP Time Exceeded' de volta — mapeando toda a rota hop a hop.<br><br>"
+            f"<b>Outros tipos ICMP relevantes:</b> tipo 3 (Destination Unreachable) "
+            f"informa que um host ou porta não pode ser alcançado; "
+            f"tipo 11 (Time Exceeded) é gerado ao descartar pacotes com TTL=0; "
+            f"tipo 5 (Redirect) instrui o host a usar uma rota diferente.<br><br>"
+            f"<b>ICMP em contexto de segurança:</b> varreduras ICMP "
+            f"(<i>ping sweep</i>) identificam quais hosts estão ativos antes "
+            f"de um ataque mais direcionado. Por isso, muitos administradores "
+            f"bloqueiam ICMP no perímetro — mas isso também prejudica diagnósticos "
+            f"legítimos de conectividade e rota."
         )
 
         campos = [
@@ -902,20 +1011,36 @@ class MotorPedagogico:
 
         n1 = (
             f"<b>{origem}</b> {desc}.<br><br>"
-            f"O processo completo de obtenção de IP é chamado <b>DORA</b>: "
-            f"<b>D</b>iscover → <b>O</b>ffer → <b>R</b>equest → <b>A</b>ck."
-            + (f"<br><br>{detalhe}" if detalhe else "")
+            f"O <b>protocolo DHCP</b> automatiza a atribuição de configurações IP "
+            f"em uma rede: endereço IP, máscara de sub-rede, gateway padrão, "
+            f"servidores DNS e tempo de concessão (<i>lease time</i>). "
+            f"Sem DHCP, cada dispositivo precisaria de configuração manual "
+            f"— inviável em redes com dezenas ou centenas de hosts.<br><br>"
+            f"<b>O fluxo DORA completo:</b><br>"
+            f"→ <b>Discover</b>: broadcast — o cliente grita 'tem servidor DHCP nessa rede?'<br>"
+            f"→ <b>Offer</b>: o servidor propõe um IP disponível com parâmetros<br>"
+            f"→ <b>Request</b>: o cliente confirma formalmente que quer aquele IP<br>"
+            f"→ <b>Ack</b>: o servidor concede — o cliente agora tem IP válido"
+            + (f"<br><br><b>Esta mensagem — DHCP {tipo}:</b> {detalhe}" if detalhe else "")
         )
 
         n2 = (
             f"<b>Tipo:</b> DHCP {tipo}<br>"
             f"<b>Origem:</b> {origem} → <b>Destino:</b> {destino}<br><br>"
-            f"<b>O que o DHCP distribui:</b> endereço IP, máscara de sub-rede, "
-            f"gateway padrão, servidores DNS e tempo de concessão (lease time).<br><br>"
-            f"<b>Contexto de segurança:</b> o DHCP não autentica clientes nem servidores. "
-            f"Um <i>rogue DHCP server</i> pode distribuir gateway e DNS falsos, "
-            f"redirecionando o tráfego. Em ambientes corporativos, "
-            f"<b>DHCP Snooping</b> em switches gerenciados previne esse ataque."
+            f"<b>O que o servidor DHCP distribui além do IP:</b><br>"
+            f"• <b>Máscara de sub-rede</b>: define o tamanho do segmento local<br>"
+            f"• <b>Gateway padrão</b>: endereço do roteador para tráfego externo<br>"
+            f"• <b>Servidores DNS</b>: para resolução de nomes<br>"
+            f"• <b>Lease time</b>: quanto tempo o cliente pode manter o IP sem renovar<br><br>"
+            f"<b>Rogue DHCP Server — o ataque silencioso:</b> como o DHCP não "
+            f"autentica clientes nem servidores, um dispositivo malicioso pode "
+            f"responder ao Discover de {origem} antes do servidor legítimo "
+            f"e distribuir gateway e DNS falsos — redirecionando "
+            f"silenciosamente todo o tráfego do host para um servidor "
+            f"controlado pelo atacante, sem que o usuário perceba nada.<br><br>"
+            f"<b>Mitigação:</b> <b>DHCP Snooping</b> em switches gerenciados "
+            f"designa apenas portas específicas como confiáveis para responder "
+            f"mensagens DHCP Offer, bloqueando servidores não autorizados."
         )
 
         campos = [
@@ -939,20 +1064,38 @@ class MotorPedagogico:
         fluxo   = self._fluxo(origem, "SSH (cifrado)", f"{destino}:{porta}")
 
         n1 = (
-            f"<b>{origem}</b> está acessando o terminal de <b>{destino}</b> "
-            f"via <b style='color:#2ECC71;'>SSH — protocolo totalmente cifrado</b>.<br><br>"
-            f"Todo o tráfego SSH é protegido por criptografia: comandos, "
-            f"respostas e até mesmo a autenticação são ilegíveis para "
-            f"qualquer capturador na rede."
+            f"<b>{origem}</b> estabelece uma sessão <b>SSH</b> com "
+            f"<b>{destino}</b> na porta <b>{porta}</b>.<br><br>"
+            f"SSH (Secure Shell) é o substituto seguro de protocolos legados "
+            f"como Telnet e rsh, que transmitiam tudo — incluindo senhas — "
+            f"em texto puro. No SSH, o canal é completamente cifrado desde o "
+            f"primeiro byte após o handshake: comandos digitados, saídas do "
+            f"terminal, senhas e até redirecionamento de portas "
+            f"(<i>port forwarding</i>) transitam ilegíveis para qualquer "
+            f"capturador na rede."
         )
 
         n2 = (
             f"<b>Porta:</b> {porta}<br>"
-            f"<b>Criptografia:</b> negociada no handshake (AES, ChaCha20 etc.)<br>"
-            f"<b>Autenticação:</b> senha ou par de chaves pública/privada<br><br>"
-            f"<b>Boas práticas:</b> preferir autenticação por chave (mais seguro "
-            f"que senha), desabilitar login root direto e mudar a porta padrão "
-            f"em servidores expostos à internet reduz ruído de bots."
+            f"<b>Cifras de transporte comuns:</b> AES-256-GCM, ChaCha20-Poly1305<br>"
+            f"<b>Autenticação:</b> por senha ou par de chaves pública/privada<br><br>"
+            f"<b>Como o SSH protege passo a passo:</b><br>"
+            f"1. Handshake: cliente e servidor trocam chaves e negociam cifras<br>"
+            f"2. Autenticação do servidor: o cliente verifica a chave pública "
+            f"do servidor em <code>~/.ssh/known_hosts</code> — "
+            f"impedindo que um host falso se apresente como o servidor real<br>"
+            f"3. Autenticação do cliente: por senha ou par Ed25519/RSA<br>"
+            f"4. Canal cifrado: toda a sessão de terminal flui protegida<br><br>"
+            f"<b>Chave vs senha:</b> chaves são imunes a brute-force se geradas "
+            f"com entropia adequada. Para qualquer servidor exposto à internet, "
+            f"desabilitar autenticação por senha "
+            f"(<code>PasswordAuthentication no</code> no sshd_config) "
+            f"elimina ataques de dicionário automatizados que tentam "
+            f"credenciais continuamente em escala global.<br><br>"
+            f"<b>Boas práticas adicionais:</b> alterar a porta padrão reduz "
+            f"ruído de bots; <code>fail2ban</code> bloqueia IPs com múltiplas "
+            f"tentativas falhas; autenticação multifator (MFA) com OTP "
+            f"adiciona uma segunda camada mesmo para acesso por chave."
         )
 
         n3 = _tabela([
@@ -976,21 +1119,36 @@ class MotorPedagogico:
         alerta  = f"FTP transmite usuário e senha em texto puro para {destino}."
 
         n1 = (
-            f"<b>{origem}</b> está transferindo arquivos para <b>{destino}</b> "
-            f"via <b style='color:#E67E22;'>FTP — sem nenhuma criptografia</b>.<br><br>"
-            f"Usuário, senha e todo o conteúdo dos arquivos trafegam em texto puro. "
-            f"Qualquer capturador na rede pode interceptar credenciais e arquivos."
+            f"<b>{origem}</b> acessa o servidor <b>{destino}</b> via "
+            f"<b style='color:#E67E22;'>FTP — protocolo sem nenhuma criptografia</b>.<br><br>"
+            f"O FTP foi projetado em 1971, numa época em que a internet era uma "
+            f"rede acadêmica fechada e segurança não era uma preocupação. "
+            f"Toda a sessão de controle — incluindo usuário e senha — trafega "
+            f"em <b>texto ASCII puro na porta 21</b>. "
+            f"No Wireshark, basta filtrar por <code>ftp</code> e abrir "
+            f"<i>Follow TCP Stream</i> para ler as credenciais completas "
+            f"exatamente como foram digitadas."
         )
 
         n2 = (
-            f"<b>Porta de controle:</b> {porta} (texto puro)<br>"
-            f"<b>Porta de dados:</b> 20 (ativa) ou negociada (passiva)<br><br>"
-            f"<b>Alternativas seguras:</b><br>"
-            f"• <b>SFTP</b> — FTP sobre SSH, porta 22, completamente cifrado<br>"
-            f"• <b>FTPS</b> — FTP sobre TLS, porta 990 (implícito) ou 21 (explícito)<br><br>"
-            f"<b>Por que isso importa:</b> diferente do HTTP onde só dados de formulário "
-            f"são sensíveis, no FTP as credenciais aparecem nos primeiros pacotes de "
-            f"controle — visíveis em qualquer captura de rede."
+            f"<b>Porta de controle:</b> {porta} (comandos em texto puro)<br>"
+            f"<b>Porta de dados:</b> 20 (modo ativo) ou negociada (modo passivo)<br><br>"
+            f"<b>Por que dois canais separados?</b> O FTP divide a sessão: "
+            f"a conexão de controle (porta 21) recebe comandos como "
+            f"<code>USER</code>, <code>PASS</code>, <code>LIST</code>, <code>RETR</code>; "
+            f"a conexão de dados transfere os arquivos em si. "
+            f"Credenciais aparecem <i>antes</i> de qualquer arquivo ser enviado — "
+            f"nos primeiros pacotes da sessão, visíveis em texto puro.<br><br>"
+            f"<b>Modo ativo vs passivo:</b> no modo ativo, o servidor abre "
+            f"uma conexão de volta ao cliente (porta 20) — problemático com "
+            f"NAT e firewalls. No modo passivo (PASV), o cliente inicia ambas "
+            f"as conexões, mais compatível com redes modernas.<br><br>"
+            f"<b>Alternativas obrigatórias para qualquer uso atual:</b><br>"
+            f"• <b>SFTP</b> (SSH File Transfer Protocol) — usa o canal SSH, "
+            f"porta 22, completamente cifrado; não tem relação técnica com FTP<br>"
+            f"• <b>FTPS</b> (FTP sobre TLS) — adiciona camada TLS ao FTP, "
+            f"porta 990 (implícito) ou 21 com STARTTLS (explícito)<br>"
+            f"• <b>SCP</b> — cópia segura via SSH, simples e amplamente disponível"
         )
 
         n3 = _tabela([
@@ -1015,21 +1173,34 @@ class MotorPedagogico:
         alerta  = f"Tráfego SMB detectado — verifique se SMBv1 está desativado em {destino}."
 
         n1 = (
-            f"<b>{origem}</b> está acessando arquivos compartilhados em "
-            f"<b>{destino}</b> via <b>SMB (porta {porta})</b>.<br><br>"
-            f"SMB é o protocolo padrão de compartilhamento de arquivos no Windows, "
-            f"usado também em servidores Linux com Samba."
+            f"<b>{origem}</b> acessa recursos compartilhados em <b>{destino}</b> "
+            f"via <b>SMB (Server Message Block)</b>, porta <b>{porta}</b>.<br><br>"
+            f"SMB é o protocolo nativo do Windows para compartilhamento de "
+            f"arquivos, impressoras e comunicação entre processos na rede local. "
+            f"O Linux acessa compartilhamentos Windows via implementação compatível "
+            f"chamada <b>Samba</b>. Quando você navega em um caminho de rede como "
+            f"<code>\\\\servidor\\pasta</code> no Windows Explorer, "
+            f"é o SMB que opera nos bastidores."
         )
 
         n2 = (
-            f"<b>Porta:</b> {porta}<br><br>"
-            f"<b>Histórico de vulnerabilidades:</b> o SMBv1 continha a falha "
-            f"<b>EternalBlue (MS17-010)</b>, explorada pelo ransomware WannaCry "
-            f"em 2017 para se propagar por redes inteiras sem interação do usuário.<br><br>"
-            f"<b>Como verificar se SMBv1 está ativo:</b><br>"
-            f"<code>Get-SmbServerConfiguration | Select EnableSMB1Protocol</code><br><br>"
-            f"<b>Boas práticas:</b> desabilitar SMBv1, exigir assinatura de pacotes "
-            f"(SMB Signing) e limitar o acesso por firewall."
+            f"<b>Porta:</b> {porta} (SMB sobre TCP, versões 2 e 3)<br>"
+            f"<b>Porta histórica:</b> 139 (NetBIOS — SMBv1)<br><br>"
+            f"<b>O caso EternalBlue / WannaCry:</b> em 2017, uma falha crítica "
+            f"no SMBv1 (MS17-010, codinome EternalBlue) foi explorada pelo "
+            f"ransomware WannaCry e pelo worm NotPetya para se propagar "
+            f"automaticamente por redes inteiras — sem interação do usuário, "
+            f"apenas uma porta 445 acessível era suficiente para comprometer "
+            f"um sistema Windows não atualizado.<br><br>"
+            f"<b>Verificar e desabilitar SMBv1:</b><br>"
+            f"<code>Get-SmbServerConfiguration | Select EnableSMB1Protocol</code><br>"
+            f"<code>Set-SmbServerConfiguration -EnableSMB1Protocol $false</code><br><br>"
+            f"<b>Proteções do SMBv3:</b> versões modernas suportam "
+            f"<b>criptografia nativa</b> (SMB 3.0+) e <b>assinatura de pacotes "
+            f"(SMB Signing)</b> — que impede adulteração dos dados em trânsito "
+            f"e ataques de relay NTLM. Ambos devem ser obrigatórios em "
+            f"ambientes corporativos, com acesso limitado por firewall "
+            f"apenas aos hosts que necessitam do compartilhamento."
         )
 
         n3 = _tabela([
@@ -1054,23 +1225,36 @@ class MotorPedagogico:
         alerta  = f"Sessão RDP detectada — verifique se o acesso a {destino} é autorizado."
 
         n1 = (
-            f"<b>{origem}</b> está controlando remotamente a tela de "
-            f"<b>{destino}</b> via <b>RDP (porta {porta})</b>.<br><br>"
-            f"O RDP permite acesso completo ao desktop Windows remotamente. "
-            f"É uma ferramenta legítima de administração, mas também um vetor "
-            f"de ataque muito explorado quando exposto à internet."
+            f"<b>{origem}</b> controla remotamente a área de trabalho de "
+            f"<b>{destino}</b> via <b>RDP (Remote Desktop Protocol)</b>, "
+            f"porta <b>{porta}</b>.<br><br>"
+            f"O RDP é o protocolo proprietário da Microsoft para acesso remoto "
+            f"gráfico ao Windows: transmite a tela do servidor comprimida ao "
+            f"cliente e recebe de volta as entradas de teclado e mouse. "
+            f"Internamente usa TLS para cifrar a sessão, mas seu histórico "
+            f"de vulnerabilidades severas e a exposição frequente à internet "
+            f"fazem dele um dos vetores de ataque mais ativos em ambientes corporativos."
         )
 
         n2 = (
             f"<b>Porta:</b> {porta}<br><br>"
-            f"<b>Riscos quando exposto à internet:</b><br>"
-            f"• Bots varrem a porta 3389 continuamente buscando credenciais fracas<br>"
-            f"• Vulnerabilidade <b>BlueKeep (CVE-2019-0708)</b> permite execução "
-            f"remota sem autenticação em versões antigas<br>"
-            f"• Ataques de força bruta são frequentes<br><br>"
-            f"<b>Boas práticas:</b> usar RDP somente via VPN, habilitar "
-            f"<b>NLA (Network Level Authentication)</b>, monitorar eventos "
-            f"de logon (ID 4625 — falha, 4624 — sucesso) e usar MFA."
+            f"<b>Vulnerabilidades críticas de referência:</b><br>"
+            f"• <b>BlueKeep (CVE-2019-0708):</b> execução remota de código "
+            f"sem autenticação em Windows XP, 7 e Server 2008 — "
+            f"um único pacote malicioso era suficiente para comprometer o sistema<br>"
+            f"• <b>DejaBlue (CVE-2019-1181/1182):</b> variante que afetou "
+            f"também o Windows 10<br><br>"
+            f"<b>Ameaça contínua:</b> bots varrem a internet ininterruptamente "
+            f"buscando a porta 3389 aberta. Logs de Eventos em servidores expostos "
+            f"(ID 4625 — falha de login) frequentemente registram centenas de "
+            f"tentativas por hora provenientes de IPs automatizados globais.<br><br>"
+            f"<b>Proteções obrigatórias para uso seguro:</b><br>"
+            f"• Nunca expor RDP diretamente à internet — acesse somente via VPN<br>"
+            f"• Habilitar <b>NLA (Network Level Authentication)</b>: "
+            f"autentica o usuário antes de renderizar a sessão gráfica<br>"
+            f"• Habilitar <b>MFA</b> no acesso RDP<br>"
+            f"• Monitorar Eventos 4625 (falha) e 4624 (sucesso) no Visualizador<br>"
+            f"• Usar <b>RD Gateway</b> para tunelamento seguro via HTTPS em corporativo"
         )
 
         n3 = _tabela([
@@ -1094,17 +1278,33 @@ class MotorPedagogico:
         fluxo  = self._fluxo("Rede local", "ARP/DHCP", ip)
 
         n1 = (
-            f"Um novo dispositivo foi detectado na rede com o IP <b>{ip}</b>."
-            + (f"<br>Fabricante identificado pelo MAC: <b style='color:#3498DB;'>{fab}</b>." if fab else "")
-            + f"<br><br>Ele recebeu (ou já possuía) este IP via DHCP ou configuração manual."
+            f"Um novo endereço IP foi detectado na rede: <b>{ip}</b>."
+            + (f"<br>O endereço MAC aponta para fabricante: <b style='color:#3498DB;'>{fab}</b>." if fab else "")
+            + f"<br><br>O dispositivo tornou-se visível no tráfego — "
+            f"provavelmente após receber um IP via DHCP, ao enviar um ARP Request "
+            f"ou ao iniciar qualquer comunicação na rede. "
+            f"Em redes bem administradas, todo host novo deve ser identificado "
+            f"e verificado se é um dispositivo autorizado."
         )
 
         n2 = (
-            f"<b>IP:</b> {ip}<br>"
+            f"<b>IP detectado:</b> {ip}<br>"
             + (f"<b>MAC:</b> <code>{mac}</code>" + (f" — {fab}" if fab else "") + "<br>" if mac else "")
-            + f"<br><b>Identificação pelo MAC:</b> os primeiros 3 bytes (OUI) identificam "
-            f"o fabricante do adaptador de rede. Consulte macvendors.com para verificar "
-            f"dispositivos desconhecidos em sua rede."
+            + f"<br><b>OUI — Como o fabricante é identificado pelo MAC:</b> "
+            f"os primeiros 3 bytes do endereço MAC (OUI — Organizationally Unique "
+            f"Identifier) são registrados pela IEEE e identificam o fabricante "
+            f"do adaptador de rede. Consulte <b>macvendors.com</b> para verificar "
+            f"MACs desconhecidos que aparecerem na sua rede.<br><br>"
+            f"<b>Limitação importante:</b> o endereço MAC pode ser falsificado "
+            f"(<i>MAC spoofing</i>) com um simples comando no sistema operacional "
+            f"— basta uma linha no Linux ou Windows. "
+            f"Soluções de controle de acesso baseadas apenas em MAC filtering "
+            f"oferecem proteção superficial: um atacante pode clonar o MAC "
+            f"de um dispositivo autorizado em segundos.<br><br>"
+            f"<b>O que investigar:</b> verifique se {ip} consta na tabela de "
+            f"concessões DHCP do servidor, se o MAC está no inventário da rede "
+            f"e se o padrão de tráfego gerado é condizente com um host legítimo. "
+            f"Dispositivos não reconhecidos devem ser isolados até identificação."
         )
 
         campos = [
@@ -1136,21 +1336,40 @@ class MotorPedagogico:
         fluxo  = self._fluxo(origem, "HTTP (sem criptografia)", destino)
 
         n1 = (
-            f"<b style='color:#E74C3C;'>DADOS DE AUTENTICAÇÃO EM TEXTO PURO</b><br><br>"
-            f"O dispositivo <b>{origem}</b> enviou credenciais para "
-            f"<b>{destino}</b> via HTTP sem nenhuma proteção:<br><br>"
+            f"<b style='color:#E74C3C;'>CREDENCIAIS DE AUTENTICAÇÃO EXPOSTAS EM TEXTO PURO</b><br><br>"
+            f"O dispositivo <b>{origem}</b> enviou dados de login para "
+            f"<b>{destino}</b> via HTTP sem qualquer proteção criptográfica:<br><br>"
             f"{linhas_creds}<br><br>"
-            f"Qualquer capturador ativo na mesma rede Wi-Fi ou segmento de rede "
-            f"tem acesso imediato a esses dados."
+            f"Estes dados estavam legíveis em cada salto de rede entre "
+            f"{origem} e {destino}. Qualquer dispositivo no caminho — "
+            f"roteadores, switches gerenciados, pontos de acesso Wi-Fi "
+            f"ou outro host no mesmo segmento — poderia ter capturado "
+            f"estas credenciais com um simples <code>tcpdump</code> ou Wireshark, "
+            f"sem precisar atacar ativamente nenhum sistema."
         )
 
         n2 = (
-            f"<b>Por que isso é crítico:</b> diferente do HTTPS onde o TLS cifra "
-            f"o payload antes de sair do socket, o HTTP envia tudo como texto ASCII. "
-            f"O ataque é passivo — basta capturar pacotes, sem precisar invadir "
-            f"nenhum sistema.<br><br>"
-            f"<b>Solução:</b> migrar para HTTPS com certificado válido e habilitar "
-            f"HSTS para impedir downgrade para HTTP."
+            f"<b>Por que HTTP expõe credenciais completamente:</b> o payload "
+            f"de uma requisição POST em HTTP é enviado como texto ASCII na sequência: "
+            f"linha de requisição, headers, linha em branco, corpo com os campos "
+            f"no formato <code>campo=valor&campo2=valor2</code>. "
+            f"Não existe ofuscação, codificação de segurança ou chave — "
+            f"a codificação URL (<code>%XX</code>) não é criptografia, "
+            f"é apenas representação de caracteres especiais.<br><br>"
+            f"<b>Como o HTTPS resolve isso:</b> com TLS, o payload HTTP inteiro "
+            f"— incluindo a URL, os headers e o corpo com as credenciais — "
+            f"é cifrado com AES antes de sair do socket. "
+            f"Um capturador na rede enxerga apenas bytes cifrados aleatórios, "
+            f"sem nenhuma informação utilizável.<br><br>"
+            f"<b>HSTS — bloqueando downgrade para HTTP:</b> mesmo com HTTPS "
+            f"disponível, um atacante MitM pode forçar o cliente a usar HTTP "
+            f"em vez de HTTPS. O <b>HTTP Strict Transport Security (HSTS)</b> "
+            f"instrui o navegador a nunca mais aceitar HTTP para este domínio "
+            f"— bloqueando o downgrade a nível de cliente.<br><br>"
+            f"<b>Impacto prático:</b> com estas credenciais, um atacante pode "
+            f"autenticar-se como a vítima, alterar senha, exfiltrar dados "
+            f"ou usar a conta como ponto de entrada para movimentação lateral "
+            f"na rede interna."
         )
 
         n3 = _tabela([
