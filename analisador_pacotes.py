@@ -9,7 +9,7 @@ import time
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Optional
-from utils.constantes import PORTAS_HTTP, PORTAS_HTTPS, PORTAS_DHCP
+from utils.constantes import PORTAS_HTTP, PORTAS_HTTPS, PORTAS_SSH, PORTAS_FTP, PORTAS_SMB, PORTAS_RDP, PORTAS_DHCP
 from utils.rede import eh_ip_local, _CACHE_LOCAL
 
 # ── Configuracao das filas ───────────────────────────────────
@@ -149,6 +149,42 @@ def _parsear_pacote(dados: dict):
                 "ip_origem":  ip_origem,
                 "ip_destino": ip_destino,
                 "protocolo":  "HTTPS",
+            }
+        elif porta_dest in PORTAS_SSH or porta_orig in PORTAS_SSH:
+            protocolo_efetivo = "SSH"
+            evento = {
+                "tipo":       "SSH",
+                "ip_origem":  ip_origem,
+                "ip_destino": ip_destino,
+                "protocolo":  "SSH",
+                "porta_destino": porta_dest
+            }
+        elif porta_dest in PORTAS_FTP or porta_orig in PORTAS_FTP:
+            protocolo_efetivo = "FTP"
+            evento = {
+                "tipo":       "FTP",
+                "ip_origem":  ip_origem,
+                "ip_destino": ip_destino,
+                "protocolo":  "FTP",
+                "porta_destino": porta_dest
+            }
+        elif porta_dest in PORTAS_SMB or porta_orig in PORTAS_SMB:
+            protocolo_efetivo = "SMB"
+            evento = {
+                "tipo":       "SMB",
+                "ip_origem":  ip_origem,
+                "ip_destino": ip_destino,
+                "protocolo":  "SMB",
+                "porta_destino": porta_dest
+            }
+        elif porta_dest in PORTAS_RDP or porta_orig in PORTAS_RDP:
+            protocolo_efetivo = "RDP"
+            evento = {
+                "tipo":       "RDP",
+                "ip_origem":  ip_origem,
+                "ip_destino": ip_destino,
+                "protocolo":  "RDP",
+                "porta_destino": porta_dest
             }
 
     elif proto == "ICMP":

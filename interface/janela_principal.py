@@ -904,7 +904,7 @@ from interface.painel_topologia import PainelTopologia
 from interface.painel_trafego import PainelTrafego
 from interface.painel_eventos import PainelEventos
 from painel_servidor import PainelServidor
-from utils.constantes import PORTAS_HTTP, PORTAS_DHCP
+from utils.constantes import PORTAS_HTTP, PORTAS_DHCP, PORTAS_SSH, PORTAS_FTP, PORTAS_SMB, PORTAS_RDP
 from utils.gerenciador_subredes import GerenciadorSubRedes, Visibilidade
 from utils.rede import obter_ip_local, detectar_cidr_robusto, converter_ip_mascara_para_cidr, formatar_bytes
 from utils.identificador import GerenciadorDispositivos
@@ -1040,7 +1040,7 @@ class _CapturadorPacotesThread(QThread):
                     iface=self.interface,
                     prn=self._processar_pacote,
                     store=False,
-                    filter="ip or arp",
+                    filter="ip or arp or icmp",
                     promisc=not self.eh_wifi,
                 )
                 self.sniffer.start()
@@ -1096,7 +1096,7 @@ class _CapturadorPacotesThread(QThread):
             "porta_destino": None,
         }
 
-        from scapy.all import Ether, IP, TCP, UDP, ARP, DNS, Raw, BOOTP, DHCP
+        from scapy.all import Ether, IP, TCP, UDP, ARP, DNS, Raw, BOOTP, DHCP, ICMP
 
         if pacote.haslayer(Ether):
             dados["mac_origem"]  = pacote[Ether].src
@@ -1164,6 +1164,9 @@ class _CapturadorPacotesThread(QThread):
                         dados["dominio"] = pacote[DNS].qd.qname.decode(
                             'utf-8', errors='ignore'
                         ).rstrip('.')
+
+            elif pacote.haslayer(ICMP):
+                dados["protocolo"] = "ICMP"
 
         elif pacote.haslayer(ARP):
             dados["protocolo"]  = "ARP"

@@ -39,3 +39,7 @@ CLASSIFICACAO_USO: dict[str, tuple[str, str]] = {
 PORTAS_HTTP: frozenset[int] = frozenset({80, 8080, 8000})
 PORTAS_HTTPS: frozenset[int] = frozenset({443, 8443})
 PORTAS_DHCP: frozenset[int] = frozenset({67, 68})
+PORTAS_SSH: frozenset[int] = frozenset({22})
+PORTAS_FTP: frozenset[int] = frozenset({20, 21})
+PORTAS_SMB: frozenset[int] = frozenset({445})
+PORTAS_RDP: frozenset[int] = frozenset({3389})

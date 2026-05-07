@@ -103,10 +103,15 @@ class NetlabCore:
     PROTO_DHCP    = 7
     PROTO_TCP_SYN = 8
     PROTO_OUTRO   = 9
+    PROTO_SSH     = 10
+    PROTO_FTP     = 11
+    PROTO_SMB     = 12
+    PROTO_RDP     = 13
 
     _NOMES = {
         0: "TCP", 1: "UDP", 2: "DNS", 3: "HTTP", 4: "HTTPS",
         5: "ARP", 6: "ICMP", 7: "DHCP", 8: "TCP_SYN", 9: "Outro",
+        10: "SSH", 11: "FTP", 12: "SMB", 13: "RDP",
     }
 
     def __init__(self):
