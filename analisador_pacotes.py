@@ -105,18 +105,19 @@ def _parsear_pacote(dados: dict):
             "dhcp_tipo":  dados.get("dhcp_tipo", ""),
             "dhcp_xid":   dados.get("dhcp_xid", 0),
         }
+    elif (proto == "TCP" or proto == "UDP") and (porta_dest in PORTAS_HTTPS or porta_orig in PORTAS_HTTPS):
+        protocolo_efetivo = "HTTPS"
+        evento = {
+            "tipo":       "HTTPS",
+            "ip_origem":  ip_origem,
+            "ip_destino": ip_destino,
+            "protocolo":  "HTTPS",
+            "porta_destino": porta_dest,
+            "tls_sni":    dados.get("tls_sni", "")
+        }
 
     elif proto == "TCP":
-        if dados.get("flags") == "SYN":
-            evento = {
-                "tipo":          "TCP_SYN",
-                "ip_origem":     ip_origem,
-                "ip_destino":    ip_destino,
-                "porta_origem":  porta_orig,
-                "porta_destino": porta_dest,
-                "protocolo":     "TCP",
-            }
-        elif porta_dest in PORTAS_HTTP or porta_orig in PORTAS_HTTP:
+        if porta_dest in PORTAS_HTTP or porta_orig in PORTAS_HTTP:
             evento, protocolo_efetivo = _parse_http(
                 dados.get("payload", b""), ip_origem, ip_destino
             )
@@ -142,13 +143,14 @@ def _parsear_pacote(dados: dict):
                                 evento["http_caminho"] = evento["recurso"]
                     except Exception:
                         pass
-        elif porta_dest in PORTAS_HTTPS or porta_orig in PORTAS_HTTPS:
-            protocolo_efetivo = "HTTPS"
+        elif dados.get("flags") == "SYN":
             evento = {
-                "tipo":       "HTTPS",
-                "ip_origem":  ip_origem,
-                "ip_destino": ip_destino,
-                "protocolo":  "HTTPS",
+                "tipo":          "TCP_SYN",
+                "ip_origem":     ip_origem,
+                "ip_destino":    ip_destino,
+                "porta_origem":  porta_orig,
+                "porta_destino": porta_dest,
+                "protocolo":     "TCP",
             }
         elif porta_dest in PORTAS_SSH or porta_orig in PORTAS_SSH:
             protocolo_efetivo = "SSH"

@@ -811,9 +811,16 @@ class DiagnosticoAvançado(QDialog):
     # ── Exportação ───────────────────────────────────────────────────────
 
     def _exportar_relatorio(self):
-        """Salva o relatório completo em arquivo .txt na pasta atual."""
+        """Salva o relatório completo em arquivo .txt na pasta 'diagnóstico'."""
         try:
-            nome_arquivo = f"netlab_diagnostico_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            pasta_diag = "diagnóstico"
+            if not os.path.exists(pasta_diag):
+                os.makedirs(pasta_diag)
+
+            nome_arquivo = os.path.join(
+                pasta_diag,
+                f"netlab_diagnostico_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            )
             r = self._ultimo_relatorio
 
             linhas = [
